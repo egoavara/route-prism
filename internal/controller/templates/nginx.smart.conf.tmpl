@@ -1,0 +1,101 @@
+worker_processes 1;
+error_log /dev/stderr notice;
+pid /tmp/nginx.pid;
+events { worker_connections 1024; }
+
+http {
+    access_log /dev/stdout;
+
+    # ── Smart-mode translator (OpenResty) ──────────────────────────
+    # We forward directly to a variant Pod IP, bypassing the target
+    # Service's HTTPRoute on the second hop. Because the second hop
+    # is a Pod IP, never a Service, we can't loop back into the
+    # translator — no "checked" marker needed.
+    #
+    # Cookie syntax carried by clients (one cookie, multi-tier):
+    #     <routingKey>:<variant>|<routingKey>:<variant>|...
+    # `<variant>` may be `.` to mean "no fork at this tier".
+    # Each translator only acts on the entry whose <routingKey> matches
+    # its own ({{ .RoutingKey }}); other entries are passed through
+    # untouched into the outbound Baggage so sibling tiers downstream
+    # see them.
+
+    # Variant Service name → variant Pod IP. "default" is the target's
+    # stable Pod IP — used when our entry is missing or equals ".".
+    map $prism_my_variant $variant_addr {
+        default        "{{ .DefaultPodIP }}:{{ .DefaultPort }}";
+        {{- range .Variants }}
+        "{{ .CookieValue }}" "{{ .PodIP }}:{{ .Port }}";
+        {{- end }}
+    }
+
+    server {
+        listen 80 default_server;
+        server_name _;
+
+        # Parse the cookie once per request:
+        #   - extract our own RoutingKey's value into $prism_my_variant
+        #     (used to pick a variant Pod IP via the map above)
+        #   - convert the entire cookie value into W3C Baggage form for
+        #     downstream propagation, dropping `<k>:.` no-ops.
+        access_by_lua_block {
+            local source_cookie  = "{{ .SourceCookie }}"
+            local routing_key    = "{{ .RoutingKey }}"
+
+            -- Extract the named cookie's value (RFC 6265-loose).
+            local raw = ""
+            local cookie_hdr = ngx.var.http_cookie or ""
+            for token in string.gmatch(cookie_hdr, "([^;]+)") do
+                local kv = string.gsub(token, "^%s+", "")
+                local eq = string.find(kv, "=", 1, true)
+                if eq then
+                    local k = string.sub(kv, 1, eq - 1)
+                    if k == source_cookie then
+                        raw = string.sub(kv, eq + 1)
+                        break
+                    end
+                end
+            end
+
+            -- Per-tier: pick out the <routingKey>:<value> entry that's
+            -- ours. Default to "" → maps to default Pod IP.
+            local mine = ""
+            local baggage_parts = {}
+            if raw ~= "" then
+                for entry in string.gmatch(raw, "([^|]+)") do
+                    local colon = string.find(entry, ":", 1, true)
+                    if colon then
+                        local k = string.sub(entry, 1, colon - 1)
+                        local v = string.sub(entry, colon + 1)
+                        if k == routing_key and v ~= "." then
+                            mine = v
+                        end
+                        if v ~= "." then
+                            baggage_parts[#baggage_parts + 1] = k .. "=" .. v
+                        end
+                    end
+                end
+            end
+            ngx.var.prism_my_variant = mine
+
+            -- Reconstruct outbound Baggage. Inbound Baggage is dropped:
+            -- the cookie is the source of truth and we don't want stale
+            -- members from upstream forks bleeding into our hop.
+            if #baggage_parts > 0 then
+                ngx.req.set_header("Baggage", table.concat(baggage_parts, ","))
+            else
+                ngx.req.clear_header("Baggage")
+            end
+        }
+
+        # The lua block above writes into this variable; declare it.
+        set $prism_my_variant "";
+
+        location / {
+            proxy_http_version 1.1;
+            proxy_set_header   Host       $host;
+            proxy_set_header   Connection "";
+            proxy_pass http://$variant_addr$request_uri;
+        }
+    }
+}

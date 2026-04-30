@@ -1,0 +1,21 @@
+# kind cluster config tuned for Cilium-as-CNI + Istio ambient (chained).
+#
+# - disableDefaultCNI: true       — kindnet off; Cilium owns L3/L4.
+# - kube-proxy STAYS enabled      — no `kubeProxyMode: none` override.
+#
+# Why kube-proxy is on (unlike pure cilium): Cilium's kube-proxy replacement
+# uses BPF socket-LB to translate Service→Pod at the socket layer, before
+# any netfilter rules run. Istio ambient's redirection (iptables/tproxy
+# installed by istio-cni) intercepts traffic in the network namespace, so
+# Cilium's KPR bypasses it — Service traffic skips ztunnel and the waypoint
+# entirely, and HTTPRoutes never get applied. Letting plain kube-proxy do
+# ClusterIP→Pod translation keeps the iptables hop intact for Istio.
+#
+# Cilium is correspondingly installed without `kubeProxyReplacement=true`
+# and with `socketLB.enabled=false` (see hack/kind-up.sh::install_cilium).
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+networking:
+  disableDefaultCNI: true
+nodes:
+- role: control-plane

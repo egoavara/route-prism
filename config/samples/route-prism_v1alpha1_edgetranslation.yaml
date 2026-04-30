@@ -1,0 +1,13 @@
+apiVersion: route-prism.egoavara.net/v1alpha1
+kind: EdgeTranslation
+metadata:
+  labels:
+    app.kubernetes.io/name: route-prism
+    app.kubernetes.io/managed-by: kustomize
+  name: edgetranslation-sample
+spec:
+  mode: router
+  sourceCookie: x-route-prism
+  target:
+    service:
+      name: web

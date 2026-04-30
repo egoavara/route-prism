@@ -1,0 +1,15 @@
+apiVersion: route-prism.egoavara.net/v1alpha1
+kind: ContextRoute
+metadata:
+  labels:
+    app.kubernetes.io/name: route-prism
+    app.kubernetes.io/managed-by: kustomize
+  name: contextroute-sample
+spec:
+  target:
+    service:
+      name: web
+  variants:
+    selector:
+      matchLabels:
+        app: web

@@ -1,0 +1,13 @@
+# kind cluster config tuned for Cilium with Gateway API (GAMMA).
+# - disableDefaultCNI: skip kindnet so Cilium is the only CNI.
+# - kubeProxyMode: none — Cilium replaces kube-proxy.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+# Cluster name is supplied via `--name $CLUSTER` from hack/kind-up.sh so the
+# matrix runner can spin up parallel disposable clusters from the same
+# config without colliding with the dev cluster (default name: route-prism).
+networking:
+  disableDefaultCNI: true
+  kubeProxyMode: none
+nodes:
+- role: control-plane
