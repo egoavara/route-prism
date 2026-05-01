@@ -9,6 +9,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -51,12 +53,13 @@ type Result struct {
 
 // Options bundles tunable parameters for Run.
 type Options struct {
-	Namespace      string        // defaults to VerifyNamespace
-	Timeout        time.Duration // overall budget; defaults to 180s
-	KeepNamespace  bool          // when true, do not delete the namespace afterwards
-	KubeconfigPath string        // optional explicit kubeconfig path
-	ContextName    string        // required: which context to run against
-	TestImage      string        // backend image with `route-prism test` (defaults to DefaultTestImage)
+	Namespace      string                // defaults to VerifyNamespace
+	Timeout        time.Duration         // overall budget; defaults to 180s
+	KeepNamespace  bool                  // when true, do not delete the namespace afterwards
+	KubeconfigPath string                // optional explicit kubeconfig path
+	ContextName    string                // required: which context to run against
+	TestImage      string                // backend image with `route-prism test` (defaults to DefaultTestImage)
+	MeshOverride   preflight.MeshMode    // when set and mesh is Istio, forces sidecar/ambient regardless of detection
 }
 
 // Run kicks off verification asynchronously and returns a Stream the TUI
@@ -109,17 +112,31 @@ func Run(ctx context.Context, opts Options) Stream {
 		}
 		send("Connecting to cluster", cfg.Host, ok(true))
 
-		// 2. Ensure namespace (mesh detection happens inside DeepProbe).
+		// 2. Detect mesh — namespace labels and waypoint setup depend on
+		// the mesh kind/mode. Caller may override the mode via
+		// Options.MeshOverride (TUI mesh-mode picker / --mesh-mode flag).
+		send("Detecting service mesh", "scanning istio-system / kube-system", nil)
+		mesh := preflight.DetectMesh(ctx, c)
+		if opts.MeshOverride != "" && mesh.Kind == preflight.MeshIstio {
+			mesh.Mode = opts.MeshOverride
+			send("Detecting service mesh", mesh.Summary()+" (mode override)", ok(true))
+		} else {
+			send("Detecting service mesh", mesh.Summary(), ok(true))
+		}
+
+		// 3. Ensure namespace exists AND carries the mesh-required labels.
 		send("Ensuring namespace "+opts.Namespace, "", nil)
-		if err := ensureNamespace(ctx, c, opts.Namespace); err != nil {
+		nsAction, err := reconcileNamespace(ctx, c, opts.Namespace, mesh.NamespaceLabels())
+		if err != nil {
 			send("Ensuring namespace", err.Error(), ok(false))
 			resultCh <- Result{Err: err}
 			return
 		}
-		send("Ensuring namespace "+opts.Namespace, "ready", ok(true))
+		send("Ensuring namespace "+opts.Namespace, nsAction, ok(true))
 
-		// 3. Deep probe — backends + HTTPRoute + traffic verification.
-		report, cases := DeepProbe(ctx, c, cs, opts.Namespace, opts.Timeout, opts.TestImage, send)
+		// 4. Deep probe — backends + HTTPRoute + traffic verification.
+		report, cases := DeepProbe(ctx, c, cs, opts.Namespace, opts.Timeout, opts.TestImage, mesh, send)
+		report.Mesh = mesh
 
 		// 4. Cleanup namespace (best-effort; detached ctx so a cancelled
 		// parent still lets cleanup finish).
@@ -142,14 +159,101 @@ func Run(ctx context.Context, opts Options) Stream {
 	return Stream{Steps: stepsCh, Result: resultCh}
 }
 
-func ensureNamespace(ctx context.Context, c client.Client, name string) error {
-	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name, Labels: map[string]string{
-		"app.kubernetes.io/managed-by": "route-prism-verify",
-	}}}
-	if err := c.Create(ctx, ns); err != nil && !apierrors.IsAlreadyExists(err) {
-		return fmt.Errorf("create namespace %q: %w", name, err)
+// reconcileNamespace creates the namespace (idempotent) AND patches in
+// any mesh-required labels that aren't already there. Existing labels are
+// preserved — we never strip values the user/operator set deliberately.
+//
+// Returns a short human-friendly summary of what was done: "created",
+// "labels patched: ...", or "already configured".
+func reconcileNamespace(ctx context.Context, c client.Client, name string, requiredLabels map[string]string) (string, error) {
+	managedLabel := map[string]string{"app.kubernetes.io/managed-by": "route-prism-verify"}
+	allRequired := mergeLabels(managedLabel, requiredLabels)
+
+	var existing corev1.Namespace
+	getErr := c.Get(ctx, client.ObjectKey{Name: name}, &existing)
+	if apierrors.IsNotFound(getErr) {
+		ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name, Labels: allRequired}}
+		if err := c.Create(ctx, ns); err != nil && !apierrors.IsAlreadyExists(err) {
+			return "", fmt.Errorf("create namespace %q: %w", name, err)
+		}
+		if len(requiredLabels) > 0 {
+			return fmt.Sprintf("created with %s", labelsString(requiredLabels)), nil
+		}
+		return "created", nil
 	}
-	return nil
+	if getErr != nil {
+		return "", fmt.Errorf("inspect namespace %q: %w", name, getErr)
+	}
+
+	// Namespace exists. Compute which labels are missing or different.
+	missing := map[string]string{}
+	for k, v := range allRequired {
+		if cur, ok := existing.Labels[k]; !ok || cur != v {
+			missing[k] = v
+		}
+	}
+	if len(missing) == 0 {
+		return "already configured", nil
+	}
+
+	patch := client.MergeFrom(existing.DeepCopy())
+	if existing.Labels == nil {
+		existing.Labels = map[string]string{}
+	}
+	for k, v := range missing {
+		existing.Labels[k] = v
+	}
+	if err := c.Patch(ctx, &existing, patch); err != nil {
+		return "", fmt.Errorf("patch namespace %q labels: %w", name, err)
+	}
+	return "labels patched: " + labelsString(missing), nil
+}
+
+func mergeLabels(a, b map[string]string) map[string]string {
+	out := make(map[string]string, len(a)+len(b))
+	for k, v := range a {
+		out[k] = v
+	}
+	for k, v := range b {
+		out[k] = v
+	}
+	return out
+}
+
+func labelsString(m map[string]string) string {
+	if len(m) == 0 {
+		return "(none)"
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	out := make([]string, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, k+"="+m[k])
+	}
+	return strings.Join(out, ", ")
+}
+
+// Inspect connects to the cluster identified by opts.ContextName /
+// KubeconfigPath and returns mesh detection information without making
+// any modifications. The TUI calls this between context selection and
+// the deep probe so the user can confirm or override the detected
+// Istio mode (sidecar / ambient).
+func Inspect(ctx context.Context, opts Options) (preflight.MeshInfo, error) {
+	cfg, err := RestConfigFor(opts.KubeconfigPath, opts.ContextName)
+	if err != nil {
+		return preflight.MeshInfo{}, err
+	}
+	scheme := runtime.NewScheme()
+	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+	utilruntime.Must(gwv1.Install(scheme))
+	c, err := client.New(cfg, client.Options{Scheme: scheme})
+	if err != nil {
+		return preflight.MeshInfo{}, fmt.Errorf("build client: %w", err)
+	}
+	return preflight.DetectMesh(ctx, c), nil
 }
 
 func deleteNamespace(ctx context.Context, c client.Client, name string) error {

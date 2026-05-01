@@ -82,6 +82,7 @@ func DeepProbe(
 	namespace string,
 	timeout time.Duration,
 	testImage string,
+	mesh preflight.MeshInfo,
 	send func(title, detail string, ok *bool),
 ) (preflight.ProbeReport, []TrafficCase) {
 	if timeout <= 0 {
@@ -93,27 +94,44 @@ func DeepProbe(
 	ok := func(b bool) *bool { return &b }
 	deadline := time.Now().Add(timeout)
 
-	report := preflight.ProbeReport{Mesh: preflight.DetectMesh(ctx, c)}
+	report := preflight.ProbeReport{Mesh: mesh}
+
+	// Variant Service annotations vary per mesh (Istio ambient needs
+	// `istio.io/use-waypoint`; sidecar needs nothing extra).
+	svcAnnotations := serviceAnnotations(mesh)
 
 	// 1. Deploy backends.
 	send("Deploying test backends", testImage, nil)
-	if err := deployEcho(ctx, c, namespace, deepVariantA, testImage); err != nil {
+	if err := deployEcho(ctx, c, namespace, deepVariantA, testImage, svcAnnotations); err != nil {
 		send("Deploying test backends", err.Error(), ok(false))
 		report.Outcome = preflight.OutcomeProbeError
 		report.Err = err
 		return report, nil
 	}
-	if err := deployEcho(ctx, c, namespace, deepVariantB, testImage); err != nil {
+	if err := deployEcho(ctx, c, namespace, deepVariantB, testImage, svcAnnotations); err != nil {
 		send("Deploying test backends", err.Error(), ok(false))
 		report.Outcome = preflight.OutcomeProbeError
 		report.Err = err
 		return report, nil
 	}
-	if err := deployTargetService(ctx, c, namespace); err != nil {
+	if err := deployTargetService(ctx, c, namespace, svcAnnotations); err != nil {
 		send("Deploying test backends", err.Error(), ok(false))
 		report.Outcome = preflight.OutcomeProbeError
 		report.Err = err
 		return report, nil
+	}
+
+	// 1.5 Deploy a waypoint Gateway for Istio ambient — without it L7
+	// HTTPRoute matching is silently skipped.
+	if mesh.RequiresWaypoint() {
+		send("Deploying waypoint Gateway", "istio-waypoint", nil)
+		if err := deployWaypoint(ctx, c, namespace); err != nil {
+			send("Deploying waypoint Gateway", err.Error(), ok(false))
+			report.Outcome = preflight.OutcomeProbeError
+			report.Err = err
+			return report, nil
+		}
+		send("Deploying waypoint Gateway", "ready", ok(true))
 	}
 
 	if err := waitForDeploymentReady(ctx, c, namespace, deepVariantA, until(deadline)); err != nil {
@@ -194,7 +212,48 @@ func echoLabels(name string) map[string]string {
 	}
 }
 
-func deployEcho(ctx context.Context, c client.Client, ns, name, image string) error {
+// serviceAnnotations returns Service-level annotations / labels needed
+// for a given mesh (e.g. `istio.io/use-waypoint` for ambient).
+func serviceAnnotations(m preflight.MeshInfo) map[string]string {
+	if m.RequiresWaypoint() {
+		return map[string]string{"istio.io/use-waypoint": deepWaypointName}
+	}
+	return nil
+}
+
+const deepWaypointName = "verify-waypoint"
+
+// deployWaypoint creates the Istio ambient waypoint Gateway in `ns`.
+// It uses the Istio-managed gatewayClass `istio-waypoint`; istiod
+// instantiates the actual waypoint Pod from this resource. The
+// `istio.io/waypoint-for: service` label scopes the waypoint to handle
+// L7 traffic destined for Services that reference it.
+func deployWaypoint(ctx context.Context, c client.Client, ns string) error {
+	gw := &gwv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      deepWaypointName,
+			Namespace: ns,
+			Labels: map[string]string{
+				"app.kubernetes.io/managed-by": "route-prism-verify",
+				"istio.io/waypoint-for":        "service",
+			},
+		},
+		Spec: gwv1.GatewaySpec{
+			GatewayClassName: gwv1.ObjectName("istio-waypoint"),
+			Listeners: []gwv1.Listener{{
+				Name:     "mesh",
+				Port:     gwv1.PortNumber(15008),
+				Protocol: gwv1.ProtocolType("HBONE"),
+			}},
+		},
+	}
+	if err := c.Create(ctx, gw); err != nil && !apierrors.IsAlreadyExists(err) {
+		return fmt.Errorf("create waypoint Gateway: %w", err)
+	}
+	return nil
+}
+
+func deployEcho(ctx context.Context, c client.Client, ns, name, image string, svcLabelExtras map[string]string) error {
 	labels := echoLabels(name)
 	dep := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, Labels: labels},
@@ -232,7 +291,7 @@ func deployEcho(ctx context.Context, c client.Client, ns, name, image string) er
 		return fmt.Errorf("create deployment %q: %w", name, err)
 	}
 	svc := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, Labels: labels},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, Labels: mergeLabels(labels, svcLabelExtras)},
 		Spec: corev1.ServiceSpec{
 			Selector: labels,
 			Ports: []corev1.ServicePort{{
@@ -253,15 +312,16 @@ func deployEcho(ctx context.Context, c client.Client, ns, name, image string) er
 // deployTargetService creates the GAMMA "frontend" Service that the
 // HTTPRoute attaches to via parentRef. It has no selector — traffic is
 // redirected by the mesh/HTTPRoute layer, never by Service endpoints.
-func deployTargetService(ctx context.Context, c client.Client, ns string) error {
+func deployTargetService(ctx context.Context, c client.Client, ns string, labelExtras map[string]string) error {
+	labels := mergeLabels(map[string]string{
+		"app.kubernetes.io/managed-by": "route-prism-verify",
+		"app.kubernetes.io/component":  "target",
+	}, labelExtras)
 	svc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      deepTargetSvc,
 			Namespace: ns,
-			Labels: map[string]string{
-				"app.kubernetes.io/managed-by": "route-prism-verify",
-				"app.kubernetes.io/component":  "target",
-			},
+			Labels:    labels,
 		},
 		Spec: corev1.ServiceSpec{
 			Ports: []corev1.ServicePort{{

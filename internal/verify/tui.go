@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
@@ -34,6 +35,10 @@ var (
 
 type resultMsg Result
 type doneListening struct{}
+type inspectMsg struct {
+	mesh preflight.MeshInfo
+	err  error
+}
 
 // ---------- model ----------
 
@@ -41,9 +46,17 @@ type uiState int
 
 const (
 	statePicking uiState = iota
+	stateInspecting
+	stateModePicking
 	stateRunning
 	stateDone
 )
+
+// modeOption is one row in the Istio mesh-mode picker.
+type modeOption struct {
+	label string
+	mode  preflight.MeshMode // "" = use auto-detected
+}
 
 // Model is the top-level bubbletea model for the verify TUI.
 type Model struct {
@@ -55,6 +68,8 @@ type Model struct {
 	steps      []Step
 	result     *Result
 	mesh       preflight.MeshInfo
+	modes      []modeOption
+	modeCursor int
 	spinner    spinner.Model
 	cancelFunc context.CancelFunc
 
@@ -92,11 +107,26 @@ func (m Model) Init() tea.Cmd {
 
 // ---------- commands ----------
 
+func (m *Model) startInspection() tea.Cmd {
+	opts := m.opts
+	opts.ContextName = m.chosen.Name
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		mesh, err := Inspect(ctx, opts)
+		return inspectMsg{mesh: mesh, err: err}
+	}
+}
+
 func (m *Model) startVerification() tea.Cmd {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelFunc = cancel
 	opts := m.opts
 	opts.ContextName = m.chosen.Name
+	// Mode picker selection (if any) flows through opts.MeshOverride.
+	if m.state == stateRunning && m.modes != nil && m.modeCursor < len(m.modes) {
+		opts.MeshOverride = m.modes[m.modeCursor].mode
+	}
 	stream := Run(ctx, opts)
 	return waitStep(stream)
 }
@@ -149,6 +179,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.steps = append(m.steps, msg.step)
 		return m, waitStep(msg.stream)
 
+	case inspectMsg:
+		if msg.err != nil {
+			// Treat inspection failure as a hard fail.
+			r := Result{Err: msg.err}
+			m.result = &r
+			m.state = stateDone
+			return m, nil
+		}
+		m.mesh = msg.mesh
+		// Show mode picker only for Istio installs; everything else
+		// proceeds straight to the deep probe.
+		if msg.mesh.Kind == preflight.MeshIstio {
+			m.modes = []modeOption{
+				{label: fmt.Sprintf("Auto (detected: %s)", displayMode(msg.mesh.Mode)), mode: ""},
+				{label: "Force ambient", mode: preflight.MeshModeAmbient},
+				{label: "Force sidecar", mode: preflight.MeshModeSidecar},
+			}
+			m.modeCursor = 0
+			m.state = stateModePicking
+			return m, nil
+		}
+		m.state = stateRunning
+		return m, m.startVerification()
+
 	case resultMsg:
 		m.state = stateDone
 		r := Result(msg)
@@ -180,6 +234,29 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "enter":
 			c := m.contexts[m.cursor]
 			m.chosen = &c
+			m.state = stateInspecting
+			return m, m.startInspection()
+		}
+
+	case stateInspecting:
+		switch msg.String() {
+		case "ctrl+c", "q":
+			return m, tea.Quit
+		}
+
+	case stateModePicking:
+		switch msg.String() {
+		case "ctrl+c", "q", "esc":
+			return m, tea.Quit
+		case "up", "k":
+			if m.modeCursor > 0 {
+				m.modeCursor--
+			}
+		case "down", "j":
+			if m.modeCursor < len(m.modes)-1 {
+				m.modeCursor++
+			}
+		case "enter":
 			m.state = stateRunning
 			return m, m.startVerification()
 		}
@@ -208,12 +285,58 @@ func (m Model) View() string {
 	switch m.state {
 	case statePicking:
 		return m.viewPick()
+	case stateInspecting:
+		return m.viewInspecting()
+	case stateModePicking:
+		return m.viewModePick()
 	case stateRunning:
 		return m.viewRunning()
 	case stateDone:
 		return m.viewDone()
 	}
 	return ""
+}
+
+func (m Model) viewInspecting() string {
+	var b strings.Builder
+	b.WriteString(titleStyle.Render("route-prism verify"))
+	b.WriteString("\n\n")
+	b.WriteString(stepRunStyle.Render(m.spinner.View()))
+	b.WriteString("  Connecting to ")
+	if m.chosen != nil {
+		b.WriteString(currentStyle.Render(m.chosen.Name))
+	}
+	b.WriteString(" and detecting mesh…\n\n")
+	b.WriteString(dimStyle.Render("ctrl+c to abort"))
+	return b.String()
+}
+
+func (m Model) viewModePick() string {
+	var b strings.Builder
+	b.WriteString(titleStyle.Render("route-prism verify"))
+	b.WriteString("\n\n")
+	b.WriteString(headStyle.Render("Detected: "))
+	b.WriteString(m.mesh.Summary())
+	b.WriteString("\n")
+	b.WriteString(dimStyle.Render("Pick how to verify. Auto trusts the detection above; Force overrides it."))
+	b.WriteString("\n\n")
+	for i, opt := range m.modes {
+		marker := "  "
+		if i == m.modeCursor {
+			marker = cursorStyle.Render("▸ ")
+		}
+		fmt.Fprintf(&b, "%s%s\n", marker, opt.label)
+	}
+	b.WriteString("\n")
+	b.WriteString(dimStyle.Render("↑/↓ move · enter run · q quit"))
+	return b.String()
+}
+
+func displayMode(m preflight.MeshMode) string {
+	if m == "" {
+		return "unknown"
+	}
+	return string(m)
 }
 
 func (m Model) viewPick() string {

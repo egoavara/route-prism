@@ -24,11 +24,23 @@ const (
 	MeshCilium  MeshKind = "cilium"
 )
 
+// MeshMode is the dataplane flavour, relevant to namespaces / waypoint
+// requirements. Only meaningful for Istio today.
+type MeshMode string
+
+const (
+	MeshModeUnknown MeshMode = ""
+	MeshModeSidecar MeshMode = "sidecar" // istio-injection=enabled namespace label
+	MeshModeAmbient MeshMode = "ambient" // istio.io/dataplane-mode=ambient + waypoint
+	MeshModeNative  MeshMode = "native"  // mesh handles routing without per-namespace opt-in (Cilium)
+)
+
 // MeshInfo carries best-effort identification of the surrounding service
 // mesh. All fields are optional — population depends on what was readable
 // in istio-system / kube-system.
 type MeshInfo struct {
 	Kind    MeshKind
+	Mode    MeshMode
 	Version Version // zero value if unparseable
 	// RawImage is the container image string the version was parsed from,
 	// kept around for surfacing in event messages.
@@ -41,11 +53,40 @@ func (m MeshInfo) Summary() string {
 	case MeshUnknown:
 		return "unknown (neither istiod nor cilium-operator found)"
 	default:
-		if m.Version.IsZero() {
-			return fmt.Sprintf("%s (version unknown, image=%q)", m.Kind, m.RawImage)
+		base := fmt.Sprintf("%s", m.Kind)
+		if !m.Version.IsZero() {
+			base = fmt.Sprintf("%s %s", m.Kind, m.Version)
+		} else if m.RawImage != "" {
+			base = fmt.Sprintf("%s (image=%q)", m.Kind, m.RawImage)
 		}
-		return fmt.Sprintf("%s %s", m.Kind, m.Version)
+		if m.Mode != "" && m.Mode != MeshModeNative {
+			base += " (" + string(m.Mode) + ")"
+		}
+		return base
 	}
+}
+
+// NamespaceLabels returns the labels that must be set on a namespace for
+// the mesh to actually capture traffic from Pods running there. Returns
+// nil for meshes (Cilium) that route traffic without per-namespace opt-in.
+func (m MeshInfo) NamespaceLabels() map[string]string {
+	switch m.Kind {
+	case MeshIstio:
+		switch m.Mode {
+		case MeshModeAmbient:
+			return map[string]string{"istio.io/dataplane-mode": "ambient"}
+		case MeshModeSidecar:
+			return map[string]string{"istio-injection": "enabled"}
+		}
+	}
+	return nil
+}
+
+// RequiresWaypoint indicates whether GAMMA L7 routing on this mesh needs
+// a waypoint Gateway in the target namespace plus an
+// `istio.io/use-waypoint` annotation on the parent Service.
+func (m MeshInfo) RequiresWaypoint() bool {
+	return m.Kind == MeshIstio && m.Mode == MeshModeAmbient
 }
 
 // Experimental reports whether the detected mesh version is in the
@@ -98,8 +139,15 @@ func (m MeshInfo) KnownIssue() string {
 func DetectMesh(ctx context.Context, c client.Client) MeshInfo {
 	// Istio: istio-system/istiod Deployment.
 	if info, ok := readDeploymentImage(ctx, c, "istio-system", "istiod"); ok {
+		mode := MeshModeSidecar
+		// Ambient mode adds a ztunnel DaemonSet in istio-system. Its
+		// presence is the canonical signal that the install is ambient.
+		if hasDaemonSet(ctx, c, "istio-system", "ztunnel") {
+			mode = MeshModeAmbient
+		}
 		return MeshInfo{
 			Kind:     MeshIstio,
+			Mode:     mode,
 			Version:  parseVersionFromImage(info, []string{"istiod:", "pilot:", "proxyv2:"}),
 			RawImage: info,
 		}
@@ -110,12 +158,18 @@ func DetectMesh(ctx context.Context, c client.Client) MeshInfo {
 		if info, ok := readDeploymentImage(ctx, c, "kube-system", name); ok {
 			return MeshInfo{
 				Kind:     MeshCilium,
+				Mode:     MeshModeNative,
 				Version:  parseVersionFromImage(info, []string{"cilium-operator-generic:", "cilium-operator:", "operator-generic:", "operator:", "cilium:"}),
 				RawImage: info,
 			}
 		}
 	}
 	return MeshInfo{Kind: MeshUnknown}
+}
+
+func hasDaemonSet(ctx context.Context, c client.Client, ns, name string) bool {
+	var ds appsv1.DaemonSet
+	return c.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, &ds) == nil
 }
 
 func readDeploymentImage(ctx context.Context, c client.Client, ns, name string) (string, bool) {

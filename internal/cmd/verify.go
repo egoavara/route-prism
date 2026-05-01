@@ -8,6 +8,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -27,6 +28,7 @@ func newVerifyCmd() *cobra.Command {
 		keepNamespace  bool
 		noTUI          bool
 		testImage      string
+		meshMode       string
 	)
 
 	cmd := &cobra.Command{
@@ -57,6 +59,7 @@ namespace and removed on completion (override with --keep-namespace).`,
 				KubeconfigPath: kubeconfigPath,
 				ContextName:    contextName,
 				TestImage:      testImage,
+				MeshOverride:   preflight.MeshMode(strings.TrimSpace(meshMode)),
 			}
 
 			// Decide TUI vs plain.
@@ -97,6 +100,7 @@ namespace and removed on completion (override with --keep-namespace).`,
 	pf.BoolVar(&keepNamespace, "keep-namespace", false, "Do not delete the verify namespace after the probe")
 	pf.BoolVar(&noTUI, "no-tui", false, "Always run non-interactively (no TUI)")
 	pf.StringVar(&testImage, "test-image", verify.DefaultTestImage, "Operator image used as the test backend (must contain the `test` subcommand)")
+	pf.StringVar(&meshMode, "mesh-mode", "", "Override Istio mode detection: ambient | sidecar (default: auto-detect; ignored for non-Istio meshes)")
 
 	return cmd
 }
