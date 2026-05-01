@@ -48,6 +48,27 @@ route-prism은 작은 CRD 3종으로 **멀티테넌트 트래픽 분기**, **개
 
 전체 설계(변종 디스커버리, 전파 규칙, GAMMA 구현체 호환성)는 [Wiki](https://github.com/egoavara/route-prism/wiki)에 있습니다.
 
+## 클러스터의 GAMMA 지원 여부 확인
+
+설치 전, 클러스터에 GAMMA 지원 메시가 깔려 있고 `HTTPRoute`(parentRef=Service)가 끝까지 동작하는지 확인합니다. 검증기는 테스트 백엔드 2개, `baggage` 헤더 매칭이 있는 `HTTPRoute`, 그리고 클러스터 내부에서 실제 요청을 쏘는 curl Pod까지 띄워서 e2e로 검증합니다.
+
+```bash
+# Linux / macOS
+curl -sSL https://raw.githubusercontent.com/egoavara/route-prism/main/scripts/verify.sh | bash
+
+# Windows (PowerShell)
+iwr https://raw.githubusercontent.com/egoavara/route-prism/main/scripts/verify.ps1 -UseBasicParsing | iex
+```
+
+오퍼레이터 바이너리가 이미 있다면:
+
+```bash
+./route-prism verify              # 대화식 TUI — kubeconfig 컨텍스트 선택
+./route-prism verify --no-tui     # 현재 컨텍스트 사용, CI 친화적 출력
+```
+
+`route-prism-verify` 전용 namespace에서 동작하며 끝나면 자동 정리됩니다 (`--keep-namespace`로 보존 가능 — `kubectl`로 직접 살펴볼 때 유용). 실패 시 CRD 누락 / GAMMA 미지원 컨트롤러 / 컨트롤러 거부 등을 구분해서 보고하고, Istio·Cilium 버전별 조치를 함께 안내합니다.
+
 ## 설치
 
 **전제조건:** Kubernetes ≥ 1.28, [GAMMA를 지원](https://gateway-api.sigs.k8s.io/implementations/)하는 메시(Istio, Cilium, Linkerd 등), `kubectl`.

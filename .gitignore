@@ -41,6 +41,10 @@ web/widget/.vite/
 internal/widget/dist/*
 !internal/widget/dist/.gitkeep
 
+# Local build output. The release Dockerfile and `make build-installer`
+# both stage prebuilt binaries / install.yaml here.
+dist/
+
 # Git worktrees and sibling clones (e.g. .worktree/.wiki for the GitHub wiki).
 .worktree/
 

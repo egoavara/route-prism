@@ -48,6 +48,27 @@ Everything is built on standard [Gateway API GAMMA](https://gateway-api.sigs.k8s
 
 The full design (variant discovery, propagation rules, GAMMA implementer compatibility) lives in the [Wiki](https://github.com/egoavara/route-prism/wiki).
 
+## Verify your cluster supports GAMMA
+
+Before installing, confirm that your cluster actually has a GAMMA-aware mesh and that an `HTTPRoute` with a Service `parentRef` is honoured end-to-end. The verifier deploys two test backends, an `HTTPRoute` with `baggage` header matches, and an in-cluster curl Pod that fires real requests through the mesh.
+
+```bash
+# Linux / macOS
+curl -sSL https://raw.githubusercontent.com/egoavara/route-prism/main/scripts/verify.sh | bash
+
+# Windows (PowerShell)
+iwr https://raw.githubusercontent.com/egoavara/route-prism/main/scripts/verify.ps1 -UseBasicParsing | iex
+```
+
+Or, if you've already downloaded the operator binary:
+
+```bash
+./route-prism verify              # interactive TUI — pick from kubeconfig contexts
+./route-prism verify --no-tui     # use the current context, CI-friendly output
+```
+
+The check creates a dedicated `route-prism-verify` namespace and removes it on completion (override with `--keep-namespace` to keep the resources around for `kubectl` inspection). On failure, the verifier reports whether the issue is a missing CRD, no GAMMA-aware controller, or a controller-side rejection — with version-specific advice for Istio and Cilium.
+
 ## Install
 
 **Prerequisites:** Kubernetes ≥ 1.28, a [GAMMA-supporting](https://gateway-api.sigs.k8s.io/implementations/) mesh (Istio, Cilium, Linkerd…), `kubectl`.
