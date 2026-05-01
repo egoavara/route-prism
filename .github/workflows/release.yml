@@ -3,6 +3,17 @@ name: release
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release tag to (re)build, e.g. v0.1.0. Must already exist as a GitHub Release.'
+        required: true
+        type: string
+      prerelease:
+        description: 'Treat as prerelease (skips :latest image tag).'
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   contents: write       # upload release assets
@@ -22,18 +33,32 @@ jobs:
     outputs:
       version: ${{ steps.meta.outputs.version }}
       version_no_v: ${{ steps.meta.outputs.version_no_v }}
+      prerelease: ${{ steps.meta.outputs.prerelease }}
     steps:
       - id: meta
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_PRERELEASE: ${{ inputs.prerelease }}
+          EVENT_PRERELEASE: ${{ github.event.release.prerelease }}
         run: |
-          tag="${GITHUB_REF_NAME}"
+          if [ -n "${INPUT_VERSION}" ]; then
+            tag="${INPUT_VERSION}"
+            prerelease="${INPUT_PRERELEASE:-true}"
+          else
+            tag="${GITHUB_REF_NAME}"
+            prerelease="${EVENT_PRERELEASE:-false}"
+          fi
           echo "version=${tag}" >> "$GITHUB_OUTPUT"
           echo "version_no_v=${tag#v}" >> "$GITHUB_OUTPUT"
+          echo "prerelease=${prerelease}" >> "$GITHUB_OUTPUT"
 
   web:
     name: Build web bundles
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.version || github.ref }}
 
       - uses: pnpm/action-setup@v4
         with:
@@ -81,6 +106,8 @@ jobs:
             ext: '.exe'
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.version || github.ref }}
 
       - name: Restore web bundles
         uses: actions/download-artifact@v4
@@ -135,6 +162,8 @@ jobs:
     needs: [meta, build-binary]
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.version || github.ref }}
 
       - name: Download linux/amd64 binary
         uses: actions/download-artifact@v4
@@ -172,7 +201,7 @@ jobs:
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable=${{ !github.event.release.prerelease }}
+            type=raw,value=latest,enable=${{ needs.meta.outputs.prerelease == 'false' }}
 
       - name: Build & push multi-arch image
         uses: docker/build-push-action@v6
@@ -191,6 +220,8 @@ jobs:
     needs: [meta, docker]
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.version || github.ref }}
 
       - uses: actions/setup-go@v5
         with:
@@ -218,6 +249,8 @@ jobs:
     needs: [meta, docker]
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.version || github.ref }}
 
       - uses: actions/setup-go@v5
         with:
