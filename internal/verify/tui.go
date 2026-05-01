@@ -36,7 +36,7 @@ var (
 type resultMsg Result
 type doneListening struct{}
 type inspectMsg struct {
-	mesh preflight.MeshInfo
+	insp Inspection
 	err  error
 }
 
@@ -48,9 +48,17 @@ const (
 	statePicking uiState = iota
 	stateInspecting
 	stateModePicking
+	stateNSConsent
 	stateRunning
 	stateDone
 )
+
+// consentOption is one row in the namespace-already-exists confirmation.
+type consentOption struct {
+	label  string
+	policy OnExistingPolicy
+	abort  bool // if true, picking this option quits without running
+}
 
 // modeOption is one row in the Istio mesh-mode picker.
 type modeOption struct {
@@ -64,14 +72,17 @@ type Model struct {
 	contexts []Context
 	cursor   int
 
-	chosen     *Context
-	steps      []Step
-	result     *Result
-	mesh       preflight.MeshInfo
-	modes      []modeOption
-	modeCursor int
-	spinner    spinner.Model
-	cancelFunc context.CancelFunc
+	chosen        *Context
+	steps         []Step
+	result        *Result
+	mesh          preflight.MeshInfo
+	nsState       NamespaceState
+	modes         []modeOption
+	modeCursor    int
+	consents      []consentOption
+	consentCursor int
+	spinner       spinner.Model
+	cancelFunc    context.CancelFunc
 
 	opts Options
 	err  error
@@ -113,9 +124,54 @@ func (m *Model) startInspection() tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		mesh, err := Inspect(ctx, opts)
-		return inspectMsg{mesh: mesh, err: err}
+		insp, err := Inspect(ctx, opts)
+		return inspectMsg{insp: insp, err: err}
 	}
+}
+
+// advanceFromMode bridges mode-picker → consent prompt (if needed) → run.
+// Used both after the mode picker confirms and when no mode picker was
+// shown (non-Istio meshes).
+func (m *Model) advanceFromMode() (tea.Model, tea.Cmd) {
+	// Persist mode choice (no-op when modes is empty).
+	if len(m.modes) > 0 && m.modeCursor < len(m.modes) {
+		m.opts.MeshOverride = m.modes[m.modeCursor].mode
+		m.mesh.Mode = effectiveMode(m.mesh, m.modes[m.modeCursor].mode)
+	}
+	// If the namespace exists with missing labels, prompt for consent.
+	// The detection in Inspect was based on auto-detected mode; if the
+	// user just overrode the mode, the required labels may have changed
+	// (sidecar↔ambient). We compute fresh required labels now.
+	required := m.mesh.NamespaceLabels()
+	missing := map[string]string{}
+	for k, v := range required {
+		if cur, ok := m.nsState.ExistingLabels[k]; !ok || cur != v {
+			missing[k] = v
+		}
+	}
+	m.nsState.MissingLabels = missing
+	if m.nsState.Exists && len(missing) > 0 {
+		m.consents = []consentOption{
+			{label: "Abort (recommended — re-run with a different namespace)", abort: true},
+			{label: fmt.Sprintf("Delete namespace %q and recreate (DESTROYS existing resources)", m.opts.Namespace), policy: OnExistingDelete},
+			{label: "Patch labels in place (DANGEROUS if other workloads share this namespace)", policy: OnExistingPatch},
+		}
+		m.consentCursor = 0
+		m.state = stateNSConsent
+		return m, nil
+	}
+	m.state = stateRunning
+	return m, m.startVerification()
+}
+
+func effectiveMode(m preflight.MeshInfo, override preflight.MeshMode) preflight.MeshMode {
+	if override == "" {
+		return m.Mode
+	}
+	if m.Kind != preflight.MeshIstio {
+		return m.Mode
+	}
+	return override
 }
 
 func (m *Model) startVerification() tea.Cmd {
@@ -181,18 +237,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case inspectMsg:
 		if msg.err != nil {
-			// Treat inspection failure as a hard fail.
 			r := Result{Err: msg.err}
 			m.result = &r
 			m.state = stateDone
 			return m, nil
 		}
-		m.mesh = msg.mesh
-		// Show mode picker only for Istio installs; everything else
-		// proceeds straight to the deep probe.
-		if msg.mesh.Kind == preflight.MeshIstio {
+		m.mesh = msg.insp.Mesh
+		m.nsState = msg.insp.Namespace
+		// Show mode picker only for Istio installs; everything else can
+		// either proceed to deep probe or stop at NS-consent depending
+		// on the namespace state.
+		if msg.insp.Mesh.Kind == preflight.MeshIstio {
 			m.modes = []modeOption{
-				{label: fmt.Sprintf("Auto (detected: %s)", displayMode(msg.mesh.Mode)), mode: ""},
+				{label: fmt.Sprintf("Auto (detected: %s)", displayMode(msg.insp.Mesh.Mode)), mode: ""},
 				{label: "Force ambient", mode: preflight.MeshModeAmbient},
 				{label: "Force sidecar", mode: preflight.MeshModeSidecar},
 			}
@@ -200,8 +257,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.state = stateModePicking
 			return m, nil
 		}
-		m.state = stateRunning
-		return m, m.startVerification()
+		// Skip mode picker → maybe consent → run.
+		return m.advanceFromMode()
 
 	case resultMsg:
 		m.state = stateDone
@@ -257,6 +314,27 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.modeCursor++
 			}
 		case "enter":
+			return m.advanceFromMode()
+		}
+
+	case stateNSConsent:
+		switch msg.String() {
+		case "ctrl+c", "esc":
+			return m, tea.Quit
+		case "up", "k":
+			if m.consentCursor > 0 {
+				m.consentCursor--
+			}
+		case "down", "j":
+			if m.consentCursor < len(m.consents)-1 {
+				m.consentCursor++
+			}
+		case "enter":
+			choice := m.consents[m.consentCursor]
+			if choice.abort {
+				return m, tea.Quit
+			}
+			m.opts.OnExisting = choice.policy
 			m.state = stateRunning
 			return m, m.startVerification()
 		}
@@ -289,12 +367,51 @@ func (m Model) View() string {
 		return m.viewInspecting()
 	case stateModePicking:
 		return m.viewModePick()
+	case stateNSConsent:
+		return m.viewConsent()
 	case stateRunning:
 		return m.viewRunning()
 	case stateDone:
 		return m.viewDone()
 	}
 	return ""
+}
+
+func (m Model) viewConsent() string {
+	var b strings.Builder
+	b.WriteString(titleStyle.Render("⚠  Namespace already exists"))
+	b.WriteString("\n\n")
+	fmt.Fprintf(&b, "Namespace %s already exists on this cluster.\n", currentStyle.Render(m.opts.Namespace))
+	b.WriteString("Mesh requires labels that aren't currently set:\n")
+	for k, v := range m.nsState.MissingLabels {
+		fmt.Fprintf(&b, "  • %s=%s\n", stepFailStyle.Render(k), v)
+	}
+	b.WriteString("\n")
+	b.WriteString(headStyle.Render("Existing labels on this namespace:"))
+	b.WriteString("\n")
+	if len(m.nsState.ExistingLabels) == 0 {
+		b.WriteString(dimStyle.Render("  (none)"))
+		b.WriteString("\n")
+	} else {
+		for k, v := range m.nsState.ExistingLabels {
+			fmt.Fprintf(&b, "  %s=%s\n", k, v)
+		}
+	}
+	b.WriteString("\n")
+	b.WriteString(stepFailStyle.Render("WARNING: applying mesh labels to a namespace shared with other workloads"))
+	b.WriteString("\n")
+	b.WriteString(stepFailStyle.Render("can change the dataplane behaviour of every Pod in it."))
+	b.WriteString("\n\n")
+	for i, opt := range m.consents {
+		marker := "  "
+		if i == m.consentCursor {
+			marker = cursorStyle.Render("▸ ")
+		}
+		fmt.Fprintf(&b, "%s%s\n", marker, opt.label)
+	}
+	b.WriteString("\n")
+	b.WriteString(dimStyle.Render("↑/↓ move · enter confirm · esc/ctrl+c quit"))
+	return b.String()
 }
 
 func (m Model) viewInspecting() string {

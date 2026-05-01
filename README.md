@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="web/public/icons.svg" alt="route-prism logo" width="120" height="120" />
+
 # route-prism
 
 **Context-aware [GAMMA](https://gateway-api.sigs.k8s.io/mesh/gamma/) routing for Kubernetes — one cookie or header decides which variant of a Service the request lands on.**
@@ -18,80 +20,30 @@
 
 ---
 
-## What it does
+## Verify GAMMA support
 
-route-prism turns three small Kubernetes CRDs into a routing surface that's safe to ship for **multi-tenant**, **per-developer**, and **shadow-traffic** scenarios:
-
-- **`ContextRoute`** — splits traffic into Service *variants* based on a [W3C Baggage](https://www.w3.org/TR/baggage/) member. One CR, one HTTPRoute, N variants.
-- **`EdgeTransformation`** — translates a browser cookie into Baggage at the edge so end users (not just instrumented services) can carry context. Optionally injects an **in-page widget** so users can flip variants from their own browser.
-- **`RemoteRoute`** — provisions a small Envoy proxy that funnels variant traffic *out* of the cluster to a developer's laptop. Lets one engineer take over a slice of production traffic without touching anyone else.
-
-Everything is built on standard [Gateway API GAMMA](https://gateway-api.sigs.k8s.io/mesh/gamma/) (mesh service routing) — route-prism does not replace your mesh, it just emits the right `HTTPRoute` resources.
-
-## How it works
-
-```
-                    ┌────────────┐                ┌──────────────┐
-   request ─────►   │  Edge       │   baggage     │  ContextRoute │
-   (cookie /    ▶  │  Trans-     │ ───────────►   │  HTTPRoute    │ ──► variant-A Service
-    header)        │  formation │                │  (1 rule per  │ ──► variant-B Service
-                    └────────────┘                │    variant)   │ ──► (default) target Service
-                                                  └──────────────┘            │
-                                                          ▲                   │
-                                                  RemoteRoute proxies         │
-                                                  off-cluster traffic ────────┘
-```
-
-1. A request arrives carrying a routing hint — either as a W3C `baggage` header (services already do distributed tracing) or as a cookie that an `EdgeTransformation` rewrites into baggage.
-2. The `ContextRoute` for the target Service emits an `HTTPRoute` with one match rule per variant (`baggage` member equals that variant's name) plus a catch-all that goes back to the default Service.
-3. Variants can be ordinary Services in-cluster, or — with `RemoteRoute` — an Envoy proxy that forwards out to a developer's machine. Traffic without the variant tag never sees the proxy; one developer's experiment can't accidentally page the on-call.
-
-The full design (variant discovery, propagation rules, GAMMA implementer compatibility) lives in the [Wiki](https://github.com/egoavara/route-prism/wiki).
-
-## Verify your cluster supports GAMMA
-
-Before installing, confirm that your cluster actually has a GAMMA-aware mesh and that an `HTTPRoute` with a Service `parentRef` is honoured end-to-end. The verifier deploys two test backends, an `HTTPRoute` with `baggage` header matches, and an in-cluster curl Pod that fires real requests through the mesh.
+Check that your mesh actually honours GAMMA before installing.
 
 ```bash
-# Linux / macOS
 curl -sSL https://raw.githubusercontent.com/egoavara/route-prism/main/scripts/verify.sh | bash
-
-# Windows (PowerShell)
-iwr https://raw.githubusercontent.com/egoavara/route-prism/main/scripts/verify.ps1 -UseBasicParsing | iex
 ```
 
-Or, if you've already downloaded the operator binary:
-
-```bash
-./route-prism verify              # interactive TUI — pick from kubeconfig contexts
-./route-prism verify --no-tui     # use the current context, CI-friendly output
-```
-
-The check creates a dedicated `route-prism-verify` namespace and removes it on completion (override with `--keep-namespace` to keep the resources around for `kubectl` inspection). On failure, the verifier reports whether the issue is a missing CRD, no GAMMA-aware controller, or a controller-side rejection — with version-specific advice for Istio and Cilium.
+On failure it pinpoints the cause (missing CRD / no GAMMA controller / controller rejection) with version-specific advice for Istio and Cilium.
 
 ## Install
 
-**Prerequisites:** Kubernetes ≥ 1.28, a [GAMMA-supporting](https://gateway-api.sigs.k8s.io/implementations/) mesh (Istio, Cilium, Linkerd…), `kubectl`.
-
-### Helm (recommended)
+**Requirements:** Kubernetes ≥ 1.28, a [GAMMA-supporting](https://gateway-api.sigs.k8s.io/implementations/) mesh.
 
 ```bash
+# Helm (recommended)
 helm install route-prism oci://ghcr.io/egoavara/charts/route-prism \
-  --version <latest> \
-  -n route-prism --create-namespace
-```
+  --version <latest> -n route-prism --create-namespace
 
-Browse versions at [the chart package page](https://github.com/egoavara/route-prism/pkgs/container/charts%2Froute-prism).
-
-### Single-file YAML
-
-```bash
+# Single-file YAML
 kubectl apply -f https://github.com/egoavara/route-prism/releases/latest/download/route-prism.yaml
 ```
 
-### Operator binary (for `kubectl --kubeconfig` style runs)
-
-Download from the [Releases page](https://github.com/egoavara/route-prism/releases/latest) — pre-built for `linux/amd64`, `linux/arm64`, and `windows/amd64`.
+Binaries on the [Releases page](https://github.com/egoavara/route-prism/releases/latest).
 
 ## Quickstart
 
@@ -113,9 +65,9 @@ spec:
         route-prism.egoavara.net/variant-of: checkout
 ```
 
-Any Service in the namespace carrying `route-prism.egoavara.net/variant-of: checkout` is now a routing target. Send a request with `baggage: x-route-prism=<service-name>` and it lands there.
+Any Service labeled `route-prism.egoavara.net/variant-of: checkout` becomes a routing target. Send `baggage: x-route-prism=<service-name>` to land there.
 
-### 2. Let browsers participate
+### 2. Browser cookie → Baggage
 
 ```yaml
 apiVersion: route-prism.egoavara.net/v1alpha1
@@ -133,7 +85,7 @@ spec:
     enable: true
 ```
 
-The cookie value `<routingKey>:<variant>` becomes Baggage on the upstream request. The optional widget gives users a floating in-page selector.
+Rewrites the cookie into Baggage. The optional widget gives users an in-page variant selector.
 
 ### 3. Tunnel traffic to a laptop
 
@@ -150,17 +102,42 @@ spec:
     - url: https://alice-laptop.tailnet.ts.net:8443
 ```
 
-Now a request with `baggage: x-route-prism=alice` skips production and hits Alice's machine. Other users never see it.
+Only requests with `baggage: x-route-prism=alice` reach Alice's machine.
+
+## What it does
+
+Three CRDs covering traffic split, remote routing, and shadow traffic.
+
+- **`ContextRoute`** — splits traffic by [W3C Baggage](https://www.w3.org/TR/baggage/) member. One CR = one HTTPRoute.
+- **`EdgeTransformation`** — rewrites cookies to Baggage at the edge. Optional in-page widget.
+- **`RemoteRoute`** — provisions an Envoy proxy that forwards variant traffic out to a developer's laptop.
+
+Built on standard [Gateway API GAMMA](https://gateway-api.sigs.k8s.io/mesh/gamma/) — emits `HTTPRoute`, doesn't replace your mesh.
+
+## How it works
+
+```
+                    ┌────────────┐                ┌──────────────┐
+   request ─────►   │  Edge       │   baggage     │  ContextRoute │
+   (cookie /    ▶  │  Trans-     │ ───────────►   │  HTTPRoute    │ ──► variant-A Service
+    header)        │  formation │                │  (1 rule per  │ ──► variant-B Service
+                    └────────────┘                │    variant)   │ ──► (default) target Service
+                                                  └──────────────┘            │
+                                                          ▲                   │
+                                                  RemoteRoute proxies         │
+                                                  off-cluster traffic ────────┘
+```
+
+Full design in the [Wiki](https://github.com/egoavara/route-prism/wiki).
 
 ## Documentation
 
-- **[Wiki](https://github.com/egoavara/route-prism/wiki)** — deep dives on each CRD, propagation rules, mesh compatibility matrix, and runbooks.
-- **API reference** — generated from `api/v1alpha1/*_types.go` (see Wiki sidebar).
+- **[Wiki](https://github.com/egoavara/route-prism/wiki)** — CRD details, propagation rules, mesh compatibility, runbooks.
 - **Examples** — `config/samples/`.
 
 ## Contributing
 
-Issues and PRs are welcome. The project is scaffolded with [Kubebuilder](https://book.kubebuilder.io/) — see [`AGENTS.md`](AGENTS.md) for the dev workflow.
+Issues and PRs welcome. Dev workflow in [`AGENTS.md`](AGENTS.md).
 
 ## License
 

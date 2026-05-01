@@ -264,10 +264,11 @@ func deployEcho(ctx context.Context, c client.Client, ns, name, image string, sv
 				ObjectMeta: metav1.ObjectMeta{Labels: labels},
 				Spec: corev1.PodSpec{
 					Containers: []corev1.Container{{
-						Name:    "test",
-						Image:   image,
-						Command: []string{"/manager"},
-						Args:    []string{"test", "--addr", fmt.Sprintf(":%d", deepEchoPort)},
+						Name:            "test",
+						Image:           image,
+						ImagePullPolicy: corev1.PullIfNotPresent,
+						Command:         []string{"/manager"},
+						Args:            []string{"test", "--addr", fmt.Sprintf(":%d", deepEchoPort)},
 						Env: []corev1.EnvVar{
 							{Name: "VARIANT_NAME", Value: name},
 						},

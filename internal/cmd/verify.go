@@ -29,6 +29,7 @@ func newVerifyCmd() *cobra.Command {
 		noTUI          bool
 		testImage      string
 		meshMode       string
+		onExisting     string
 	)
 
 	cmd := &cobra.Command{
@@ -60,6 +61,7 @@ namespace and removed on completion (override with --keep-namespace).`,
 				ContextName:    contextName,
 				TestImage:      testImage,
 				MeshOverride:   preflight.MeshMode(strings.TrimSpace(meshMode)),
+				OnExisting:     verify.OnExistingPolicy(strings.TrimSpace(onExisting)),
 			}
 
 			// Decide TUI vs plain.
@@ -101,6 +103,10 @@ namespace and removed on completion (override with --keep-namespace).`,
 	pf.BoolVar(&noTUI, "no-tui", false, "Always run non-interactively (no TUI)")
 	pf.StringVar(&testImage, "test-image", verify.DefaultTestImage, "Operator image used as the test backend (must contain the `test` subcommand)")
 	pf.StringVar(&meshMode, "mesh-mode", "", "Override Istio mode detection: ambient | sidecar (default: auto-detect; ignored for non-Istio meshes)")
+	pf.StringVar(&onExisting, "on-existing", "",
+		"What to do when the namespace already exists with missing mesh labels: "+
+			"\"\" abort (default), \"delete\" wipe-and-recreate, \"patch\" add labels in place. "+
+			"DANGER: \"patch\" will change dataplane behaviour for every workload in that namespace.")
 
 	return cmd
 }
