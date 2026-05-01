@@ -289,6 +289,23 @@ func (m Model) viewDone() string {
 		b.WriteString(renderOutcome(m.result.Report))
 		b.WriteString("\n\n")
 
+		if len(m.result.Cases) > 0 {
+			b.WriteString(headStyle.Render("Traffic cases"))
+			b.WriteString("\n")
+			for _, tc := range m.result.Cases {
+				icon := stepDoneStyle.Render("✓")
+				if !tc.OK {
+					icon = stepFailStyle.Render("✗")
+				}
+				detail := fmt.Sprintf("expected=%s got=%s", tc.Expected, tc.GotVariant)
+				if tc.Err != nil {
+					detail += "  " + tc.Err.Error()
+				}
+				fmt.Fprintf(&b, "  %s %s  %s\n", icon, tc.Name, dimStyle.Render(detail))
+			}
+			b.WriteString("\n")
+		}
+
 		recs := Recommend(m.result.Report)
 		if len(recs) > 0 {
 			b.WriteString(headStyle.Render("Recommendations"))
@@ -347,7 +364,7 @@ func renderOutcome(r preflight.ProbeReport) string {
 // RunPlain is the non-TUI fallback used when stdout is not a TTY or
 // --no-tui is passed. It streams steps as plain log lines and prints a
 // final report on stderr/stdout suitable for CI capture.
-func RunPlain(ctx context.Context, opts Options) (preflight.ProbeReport, error) {
+func RunPlain(ctx context.Context, opts Options) (preflight.ProbeReport, []TrafficCase, error) {
 	stream := Run(ctx, opts)
 	for s := range stream.Steps {
 		state := "…"
@@ -365,5 +382,5 @@ func RunPlain(ctx context.Context, opts Options) (preflight.ProbeReport, error) 
 		fmt.Println(line)
 	}
 	res := <-stream.Result
-	return res.Report, res.Err
+	return res.Report, res.Cases, res.Err
 }

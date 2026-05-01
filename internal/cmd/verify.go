@@ -26,6 +26,7 @@ func newVerifyCmd() *cobra.Command {
 		timeout        time.Duration
 		keepNamespace  bool
 		noTUI          bool
+		testImage      string
 	)
 
 	cmd := &cobra.Command{
@@ -55,6 +56,7 @@ namespace and removed on completion (override with --keep-namespace).`,
 				KeepNamespace:  keepNamespace,
 				KubeconfigPath: kubeconfigPath,
 				ContextName:    contextName,
+				TestImage:      testImage,
 			}
 
 			// Decide TUI vs plain.
@@ -74,8 +76,8 @@ namespace and removed on completion (override with --keep-namespace).`,
 					}
 					opts.ContextName = contextName
 				}
-				report, err := verify.RunPlain(cmd.Context(), opts)
-				return printReport(cmd, report, err)
+				report, cases, err := verify.RunPlain(cmd.Context(), opts)
+				return printReport(cmd, report, cases, err)
 			}
 
 			model := verify.NewModel(contexts, opts)
@@ -91,14 +93,15 @@ namespace and removed on completion (override with --keep-namespace).`,
 	pf.StringVar(&kubeconfigPath, "kubeconfig", "", "Explicit kubeconfig path (defaults to the usual precedence)")
 	pf.StringVar(&contextName, "context", "", "Run against this kubeconfig context non-interactively")
 	pf.StringVar(&namespace, "namespace", verify.VerifyNamespace, "Namespace used for the probe Service/HTTPRoute")
-	pf.DurationVar(&timeout, "timeout", 45*time.Second, "Per-cluster probe timeout")
+	pf.DurationVar(&timeout, "timeout", 180*time.Second, "Overall probe budget (deploy + accept + traffic)")
 	pf.BoolVar(&keepNamespace, "keep-namespace", false, "Do not delete the verify namespace after the probe")
 	pf.BoolVar(&noTUI, "no-tui", false, "Always run non-interactively (no TUI)")
+	pf.StringVar(&testImage, "test-image", verify.DefaultTestImage, "Operator image used as the test backend (must contain the `test` subcommand)")
 
 	return cmd
 }
 
-func printReport(cmd *cobra.Command, report preflight.ProbeReport, err error) error {
+func printReport(cmd *cobra.Command, report preflight.ProbeReport, cases []verify.TrafficCase, err error) error {
 	out := cmd.OutOrStdout()
 	fmt.Fprintln(out)
 	fmt.Fprintf(out, "Mesh: %s\n", report.Mesh.Summary())
@@ -112,6 +115,20 @@ func printReport(cmd *cobra.Command, report preflight.ProbeReport, err error) er
 	if report.Message != "" {
 		fmt.Fprintf(out, "Message: %s\n", report.Message)
 	}
+	if len(cases) > 0 {
+		fmt.Fprintln(out, "\nTraffic cases:")
+		for _, tc := range cases {
+			marker := "PASS"
+			if !tc.OK {
+				marker = "FAIL"
+			}
+			fmt.Fprintf(out, "  [%s] %s — expected=%s got=%s", marker, tc.Name, tc.Expected, tc.GotVariant)
+			if tc.Err != nil {
+				fmt.Fprintf(out, "  err=%q", tc.Err.Error())
+			}
+			fmt.Fprintln(out)
+		}
+	}
 	recs := verify.Recommend(report)
 	if len(recs) > 0 {
 		fmt.Fprintln(out, "\nRecommendations:")
@@ -122,7 +139,14 @@ func printReport(cmd *cobra.Command, report preflight.ProbeReport, err error) er
 	if err != nil {
 		return err
 	}
-	if report.Outcome != preflight.OutcomeAccepted {
+	allPass := report.Outcome == preflight.OutcomeAccepted
+	for _, tc := range cases {
+		if !tc.OK {
+			allPass = false
+			break
+		}
+	}
+	if !allPass {
 		os.Exit(1)
 	}
 	return nil

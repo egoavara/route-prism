@@ -16,6 +16,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
@@ -44,17 +45,18 @@ type Stream struct {
 // Result is the terminal outcome of a verification run.
 type Result struct {
 	Report preflight.ProbeReport
+	Cases  []TrafficCase
 	Err    error
 }
 
 // Options bundles tunable parameters for Run.
 type Options struct {
 	Namespace      string        // defaults to VerifyNamespace
-	Timeout        time.Duration // probe timeout; defaults to 45s
+	Timeout        time.Duration // overall budget; defaults to 180s
 	KeepNamespace  bool          // when true, do not delete the namespace afterwards
-	KeepResources  bool          // when true, do not delete the dummy Service/HTTPRoute (for kubectl inspection)
 	KubeconfigPath string        // optional explicit kubeconfig path
 	ContextName    string        // required: which context to run against
+	TestImage      string        // backend image with `route-prism test` (defaults to DefaultTestImage)
 }
 
 // Run kicks off verification asynchronously and returns a Stream the TUI
@@ -67,7 +69,7 @@ func Run(ctx context.Context, opts Options) Stream {
 		opts.Namespace = VerifyNamespace
 	}
 	if opts.Timeout <= 0 {
-		opts.Timeout = 45 * time.Second
+		opts.Timeout = 180 * time.Second
 	}
 
 	go func() {
@@ -99,14 +101,15 @@ func Run(ctx context.Context, opts Options) Stream {
 			resultCh <- Result{Err: fmt.Errorf("build client: %w", err)}
 			return
 		}
+		cs, err := kubernetes.NewForConfig(cfg)
+		if err != nil {
+			send("Connecting to cluster", err.Error(), ok(false))
+			resultCh <- Result{Err: fmt.Errorf("build clientset: %w", err)}
+			return
+		}
 		send("Connecting to cluster", cfg.Host, ok(true))
 
-		// 2. Detect mesh.
-		send("Detecting service mesh", "scanning istio-system / kube-system", nil)
-		mesh := preflight.DetectMesh(ctx, c)
-		send("Detecting service mesh", mesh.Summary(), ok(true))
-
-		// 3. Ensure namespace.
+		// 2. Ensure namespace (mesh detection happens inside DeepProbe).
 		send("Ensuring namespace "+opts.Namespace, "", nil)
 		if err := ensureNamespace(ctx, c, opts.Namespace); err != nil {
 			send("Ensuring namespace", err.Error(), ok(false))
@@ -115,28 +118,13 @@ func Run(ctx context.Context, opts Options) Stream {
 		}
 		send("Ensuring namespace "+opts.Namespace, "ready", ok(true))
 
-		// 4. Run probe.
-		send("Probing GAMMA HTTPRoute acceptance", fmt.Sprintf("timeout=%s", opts.Timeout), nil)
-		report := preflight.Probe(ctx, c, scheme, opts.Namespace, opts.Timeout)
-		report.Mesh = mesh
+		// 3. Deep probe — backends + HTTPRoute + traffic verification.
+		report, cases := DeepProbe(ctx, c, cs, opts.Namespace, opts.Timeout, opts.TestImage, send)
 
-		switch report.Outcome {
-		case preflight.OutcomeAccepted:
-			send("Probing GAMMA HTTPRoute acceptance", "Accepted by "+report.ControllerName, ok(true))
-		case preflight.OutcomeRejected:
-			send("Probing GAMMA HTTPRoute acceptance", "Rejected: "+report.Reason, ok(false))
-		case preflight.OutcomeNoController:
-			send("Probing GAMMA HTTPRoute acceptance", "No controller wrote status (no GAMMA-aware mesh?)", ok(false))
-		case preflight.OutcomeCRDMissing:
-			send("Probing GAMMA HTTPRoute acceptance", "HTTPRoute CRD not installed", ok(false))
-		case preflight.OutcomeProbeError:
-			send("Probing GAMMA HTTPRoute acceptance", report.Err.Error(), ok(false))
-		}
-
-		// 5. Cleanup namespace (best-effort, detached context so a cancelled
-		// parent ctx still lets cleanup finish).
+		// 4. Cleanup namespace (best-effort; detached ctx so a cancelled
+		// parent still lets cleanup finish).
 		if !opts.KeepNamespace {
-			cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 			defer cancel()
 			send("Cleaning up namespace", "", nil)
 			if err := deleteNamespace(cleanupCtx, c, opts.Namespace); err != nil {
@@ -148,7 +136,7 @@ func Run(ctx context.Context, opts Options) Stream {
 			send("Cleaning up namespace", "skipped (--keep-namespace)", ok(true))
 		}
 
-		resultCh <- Result{Report: report, Err: report.Err}
+		resultCh <- Result{Report: report, Cases: cases, Err: report.Err}
 	}()
 
 	return Stream{Steps: stepsCh, Result: resultCh}
