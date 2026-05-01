@@ -86,7 +86,9 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: web-dist
-          path: .
+          # upload-artifact computed `internal/` as the common ancestor and
+          # stripped it, so we restore under that same prefix here.
+          path: internal
 
       - name: Verify web bundles present
         run: |
