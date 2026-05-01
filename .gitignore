@@ -40,3 +40,6 @@ web/widget/node_modules/
 web/widget/.vite/
 internal/widget/dist/*
 !internal/widget/dist/.gitkeep
+
+# Git worktrees and sibling clones (e.g. .worktree/.wiki for the GitHub wiki).
+.worktree/
