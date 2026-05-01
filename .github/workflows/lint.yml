@@ -4,6 +4,11 @@ on:
   push:
   pull_request:
 
+env:
+  # Force JS-based actions (checkout, setup-go, etc.) to run on Node.js 24
+  # instead of the deprecated Node.js 20 runtime.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
 jobs:
   lint:
     name: Run on Ubuntu
@@ -16,6 +21,24 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+          run_install: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+          cache-dependency-path: |
+            web/pnpm-lock.yaml
+            web/widget/pnpm-lock.yaml
+
+      - name: Build dashboard + widget bundles
+        run: |
+          (cd web && pnpm install --frozen-lockfile && pnpm build)
+          (cd web/widget && pnpm install --frozen-lockfile && pnpm build)
 
       - name: Check linter configuration
         run: make lint-config
