@@ -19,6 +19,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -46,7 +48,7 @@ func newTestAPI(t *testing.T, objs ...runtime.Object) *API {
 
 func mustGet(t *testing.T, api *API, path string) ListResponse {
 	t.Helper()
-	mux := http.NewServeMux()
+	mux := chi.NewRouter()
 	api.Register(mux)
 	req := httptest.NewRequest(http.MethodGet, path, nil)
 	rec := httptest.NewRecorder()
@@ -254,7 +256,7 @@ func TestListAlternatives_FilterFuzzy(t *testing.T) {
 
 func TestListAlternatives_NotFound(t *testing.T) {
 	api := newTestAPI(t)
-	mux := http.NewServeMux()
+	mux := chi.NewRouter()
 	api.Register(mux)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/service/missing.svc/alternative", nil)
 	rec := httptest.NewRecorder()
@@ -280,6 +282,95 @@ func TestListAlternatives_RoutingKeyConflictPicksOlder(t *testing.T) {
 	}
 	if !got["."] || !got["alt-old"] {
 		t.Fatalf("expected alternatives from older CR, got %+v", resp.Items)
+	}
+}
+
+func TestListTuples(t *testing.T) {
+	now := time.Now()
+	api := newTestAPI(t,
+		mkCR("a", "demo", "web", "", now),
+		mkSvc("web", "demo", map[string]string{"app": "web"}),
+		mkSvc("canary", "demo", map[string]string{"app": "web"}),
+		mkSvc("blue", "demo", map[string]string{"app": "web"}),
+	)
+	mux := chi.NewRouter()
+	api.Register(mux)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tuple", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp TupleListResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	// One tuple per (target × alternative). 1 target, 3 alternatives ("." + 2 variants).
+	if len(resp.Items) != 3 {
+		t.Fatalf("expected 3 tuples, got %d: %+v", len(resp.Items), resp.Items)
+	}
+	// Sorted by Tuple. service is "demo/web", alternatives ".", "blue", "canary".
+	wantTuples := []string{"demo/web:.", "demo/web:blue", "demo/web:canary"}
+	for i, want := range wantTuples {
+		if resp.Items[i].Tuple != want {
+			t.Errorf("items[%d].Tuple=%q want %q", i, resp.Items[i].Tuple, want)
+		}
+		if resp.Items[i].Service != "demo/web" {
+			t.Errorf("items[%d].Service=%q want demo/web", i, resp.Items[i].Service)
+		}
+		if resp.Items[i].RoutingKey != "demo.web" {
+			t.Errorf("items[%d].RoutingKey=%q want demo.web", i, resp.Items[i].RoutingKey)
+		}
+	}
+}
+
+func TestListTuples_FilterFuzzy(t *testing.T) {
+	now := time.Now()
+	api := newTestAPI(t,
+		mkCR("a", "demo", "web", "", now),
+		mkSvc("web", "demo", map[string]string{"app": "web"}),
+		mkSvc("canary", "demo", map[string]string{"app": "web"}),
+		mkSvc("blue", "demo", map[string]string{"app": "web"}),
+	)
+	mux := chi.NewRouter()
+	api.Register(mux)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tuple?fuzzy=can", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	var resp TupleListResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Items) != 1 || resp.Items[0].Alternative != "canary" {
+		t.Fatalf("fuzzy=can unexpected: %+v", resp.Items)
+	}
+}
+
+func TestListTuples_SourceCookieFromET(t *testing.T) {
+	now := time.Now()
+	api := newTestAPI(t,
+		mkCR("a", "demo", "web", "", now),
+		mkSvc("web", "demo", map[string]string{"app": "web"}),
+		&routeprismv1alpha1.EdgeTransformation{
+			ObjectMeta: metav1.ObjectMeta{Name: "edge", Namespace: "demo"},
+			Spec: routeprismv1alpha1.EdgeTransformationSpec{
+				Mode:         routeprismv1alpha1.EdgeModeRouter,
+				SourceCookie: "x-route-prism",
+				Target:       routeprismv1alpha1.TargetReference{Service: routeprismv1alpha1.ServiceReference{Name: "web"}},
+			},
+		},
+	)
+	mux := chi.NewRouter()
+	api.Register(mux)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tuple", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	var resp TupleListResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Items) == 0 || resp.Items[0].SourceCookie != "x-route-prism" {
+		t.Fatalf("expected sourceCookie populated from ET, got: %+v", resp.Items)
 	}
 }
 

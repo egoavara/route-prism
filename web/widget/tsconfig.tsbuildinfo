@@ -1,0 +1,1 @@
+{"root":["./src/App.tsx","./src/api.ts","./src/cookieStore.ts","./src/headerOverride.ts","./src/main.tsx","./src/types.ts","./src/useHotkey.ts","./src/vite-env.d.ts","./src/components/TupleList.tsx"],"version":"5.8.3"}

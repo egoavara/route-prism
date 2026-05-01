@@ -1,0 +1,392 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: edgetransformations.route-prism.egoavara.net
+spec:
+  group: route-prism.egoavara.net
+  names:
+    kind: EdgeTransformation
+    listKind: EdgeTransformationList
+    plural: edgetransformations
+    shortNames:
+    - et
+    singular: edgetransformation
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.mode
+      name: Mode
+      type: string
+    - jsonPath: .spec.target.service.name
+      name: Target
+      type: string
+    - jsonPath: .spec.widgetInjection.enable
+      name: Widget
+      type: boolean
+    - jsonPath: .status.translatorReady
+      name: Ready
+      type: boolean
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: EdgeTransformation is the Schema for the edgetransformations
+          API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              EdgeTransformationSpec defines the desired state of EdgeTransformation.
+
+              The controller emits a single HTTPRoute attached to the target Service
+              that sends every request through the translator. The translator performs
+              two kinds of edge transformation:
+
+                - Always: cookie → baggage. Extracts SourceCookie, parses the multi-tier
+                  value "<routingKey>:<variant>|...", picks the matching entry, and
+                  stamps the W3C Baggage header on the upstream request.
+                - Optional (WidgetInjection.Enable): inject a floating in-page widget
+                  into HTML responses so users can toggle their own routing context
+                  directly from the browser.
+            properties:
+              mode:
+                description: |-
+                  Mode selects the translator implementation. Prototype only supports
+                  "router" (a small nginx Deployment provisioned by the controller).
+                enum:
+                - router
+                - envoy-lua
+                - envoy-wasm
+                type: string
+              sourceCookie:
+                description: |-
+                  SourceCookie is the cookie key whose value will be lifted into the
+                  baggage member "x-route-prism=<value>".
+                minLength: 1
+                type: string
+              target:
+                description: |-
+                  Target is the Service whose inbound traffic should be intercepted
+                  and transformed.
+                properties:
+                  service:
+                    description: Service is the target Service. Same-namespace only
+                      for now.
+                    properties:
+                      name:
+                        description: Name is the Service name in the same namespace
+                          as the parent CR.
+                        minLength: 1
+                        type: string
+                    required:
+                    - name
+                    type: object
+                required:
+                - service
+                type: object
+              widgetInjection:
+                description: |-
+                  WidgetInjection, when present and Enable=true, injects an in-page
+                  widget into HTML responses passing through this translator. The
+                  widget calls the operator API (proxied through the translator under
+                  HTTP.PathPrefix) to let users switch routing context from the
+                  browser without going to a separate dashboard.
+                properties:
+                  enable:
+                    default: false
+                    description: |-
+                      Enable turns the widget on. When false (default) the translator
+                      behaves exactly as before — pure cookie→baggage with no body
+                      rewriting.
+                    type: boolean
+                  http:
+                    description: HTTP carries URL-routing knobs for the widget asset
+                      and proxied API.
+                    properties:
+                      pathPrefix:
+                        default: .route-prism
+                        description: |-
+                          PathPrefix without leading or trailing slash. The translator
+                          reserves "/<pathPrefix>/widget/" for the bundle and
+                          "/<pathPrefix>/api/" for proxied operator API calls.
+                        pattern: ^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$
+                        type: string
+                    type: object
+                  js:
+                    description: |-
+                      JS configures client-side behavior the widget bootstraps in the
+                      browser. Notably, when the page calls cross-origin APIs (web on one
+                      domain, api on another) browser cookies are dropped on the request
+                      and cookie-based variant routing breaks. Enabling fetch/XHR override
+                      makes the widget attach the active routing context as a request
+                      header (default "X-Route-Prism") on every outbound call so the
+                      translator can read it on the API side regardless of origin.
+                    properties:
+                      fetch:
+                        description: Fetch toggles the window.fetch override.
+                        properties:
+                          enable:
+                            default: false
+                            description: Enable turns the override on.
+                            type: boolean
+                        type: object
+                      xmlhttprequest:
+                        description: XMLHttpRequest toggles the XHR.send override
+                          (legacy call sites).
+                        properties:
+                          enable:
+                            default: false
+                            description: Enable turns the override on.
+                            type: boolean
+                        type: object
+                    type: object
+                  style:
+                    description: |-
+                      Style controls the widget's UI presentation (mounting mode, margins,
+                      hotkey). The values are passed through to the widget JS via a JSON
+                      blob on the injected <script> tag.
+                    properties:
+                      hotkey:
+                        description: Hotkey lets users open the widget from the keyboard.
+                        properties:
+                          open:
+                            description: |-
+                              Open is a chord like "ctrl+\\" or "ctrl+shift+k". Empty disables
+                              the hotkey. Modifiers: ctrl, shift, alt, meta. The final segment
+                              is the key (case-insensitive).
+                            type: string
+                        type: object
+                      margin:
+                        description: |-
+                          Margin nudges the widget away from the viewport edges. Values are
+                          passed through verbatim as CSS lengths (e.g. "16px", "1rem").
+                        properties:
+                          bottom:
+                            type: string
+                          left:
+                            type: string
+                          right:
+                            type: string
+                          top:
+                            type: string
+                        type: object
+                      mode:
+                        default: float
+                        description: |-
+                          Mode picks the widget layout. "float" pins a circular toggle to a
+                          viewport corner; "sidebar" pins a vertical edge tab.
+                        enum:
+                        - float
+                        - sidebar
+                        type: string
+                    type: object
+                  target:
+                    description: |-
+                      Target controls *which* responses get the widget injected. Leaving
+                      every match field empty means "inject for all clients on all HTML
+                      responses".
+                    properties:
+                      match:
+                        description: |-
+                          Match is an AND of all set conditions. When all fields are unset
+                          the widget is injected for every HTML response.
+                        properties:
+                          cookies:
+                            description: Cookies — each entry must match (AND).
+                            items:
+                              description: |-
+                                CookieMatch matches one cookie on the request. Exactly one of Value,
+                                Regex, Present must be set.
+                              properties:
+                                name:
+                                  minLength: 1
+                                  type: string
+                                present:
+                                  type: boolean
+                                regex:
+                                  type: string
+                                value:
+                                  type: string
+                              required:
+                              - name
+                              type: object
+                              x-kubernetes-validations:
+                              - message: exactly one of value, regex, present must
+                                  be set
+                                rule: (has(self.value)?1:0)+(has(self.regex)?1:0)+(self.present?1:0)
+                                  == 1
+                            type: array
+                          headers:
+                            description: |-
+                              Headers — each entry must match (AND). Use Value (exact),
+                              Regex (PCRE), or Present (existence only).
+                            items:
+                              description: |-
+                                HeaderMatch matches one HTTP request header. Exactly one of Value, Regex,
+                                Present must be set.
+                              properties:
+                                name:
+                                  minLength: 1
+                                  type: string
+                                present:
+                                  type: boolean
+                                regex:
+                                  type: string
+                                value:
+                                  type: string
+                              required:
+                              - name
+                              type: object
+                              x-kubernetes-validations:
+                              - message: exactly one of value, regex, present must
+                                  be set
+                                rule: (has(self.value)?1:0)+(has(self.regex)?1:0)+(self.present?1:0)
+                                  == 1
+                            type: array
+                          hostnames:
+                            description: |-
+                              Hostnames — request Host header must match at least one entry (OR).
+                              Glob form supported: leading "*." matches any single subdomain
+                              label. Empty list = all hostnames.
+                            items:
+                              type: string
+                            type: array
+                          ips:
+                            description: |-
+                              IPs is a list of CIDRs. The client IP must fall in at least one to
+                              pass (OR). Empty list disables the IP gate.
+                            items:
+                              type: string
+                            type: array
+                          methods:
+                            default:
+                            - GET
+                            description: |-
+                              Methods — request method must be in the list (OR). Defaults to
+                              ["GET"] because widget injection only makes sense for HTML page
+                              loads, which are GET in practice.
+                            items:
+                              type: string
+                            type: array
+                          pathPrefixes:
+                            description: |-
+                              PathPrefixes — request path must start with at least one (OR).
+                              Empty list = all paths.
+                            items:
+                              type: string
+                            type: array
+                          trustForwardedFor:
+                            default: false
+                            description: |-
+                              TrustForwardedFor: when true, the leftmost IP from
+                              X-Forwarded-For is used as the client IP for the IPs match.
+                              Required when the translator runs behind a mesh sidecar or proxy.
+                            type: boolean
+                        type: object
+                    type: object
+                type: object
+            required:
+            - mode
+            - sourceCookie
+            - target
+            type: object
+          status:
+            description: EdgeTransformationStatus defines the observed state of EdgeTransformation.
+            properties:
+              conditions:
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              targetService:
+                description: TargetService is the resolved target Service name (echo
+                  of spec).
+                type: string
+              translatorReady:
+                description: |-
+                  TranslatorReady is true once the provisioned Deployment reports >=1
+                  available replica.
+                type: boolean
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

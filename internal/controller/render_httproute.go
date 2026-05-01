@@ -25,8 +25,19 @@ import (
 // member "<routingKey>=<svc>" as a complete member (per W3C Baggage),
 // bordered by member separators and not a substring of a longer name.
 // routingKey defaults to "<ns>.<target-svc>" but is configurable per CR.
+//
+// Envoy (Cilium / Istio GAMMA) enforces FULL-string match on
+// HTTPHeaderMatch RegularExpression — the regex must match the entire
+// header value, not just a substring. So we anchor with optional prefix
+// "(.*,)?" (everything up to and including a member separator) and an
+// optional suffix "(,.*)?" (a member separator and the rest), instead of
+// relying on partial-match boundaries. Without this wrapping a multi-
+// member baggage like "a=x,foo=bar" silently fell back to the default
+// rule under Cilium GAMMA.
 func baggageMatchRegex(routingKey, svcName string) string {
-	return `(^|,)\s*` + regexp.QuoteMeta(routingKey) + `=` + regexp.QuoteMeta(svcName) + `(;[^,]*)?(\s*,|$)`
+	return `(?:.*,)?\s*` +
+		regexp.QuoteMeta(routingKey) + `=` + regexp.QuoteMeta(svcName) +
+		`(?:;[^,]*)?\s*(?:,.*)?`
 }
 
 func httpRouteLabels(kind, owner string) map[string]string {
@@ -59,7 +70,7 @@ func sortedByName(svcs []corev1.Service) []corev1.Service {
 //   - one rule per matched variant Service: when the Baggage carries
 //     "x-route-prism=<variant-name>", route the request to that variant.
 //   - if includeCatchAll, a final catch-all rule that sends unmarked traffic
-//     back to the target Service. Set to false when an EdgeTranslation also
+//     back to the target Service. Set to false when an EdgeTransformation also
 //     attaches to the target — its rules already provide the default path
 //     and Cilium would otherwise merge two catch-alls into a 50/50 split.
 func renderCRHTTPRoute(cr *routeprismv1alpha1.ContextRoute, target *corev1.Service, variants []corev1.Service, includeCatchAll bool) *gwv1.HTTPRoute {
@@ -140,12 +151,12 @@ func renderCRHTTPRoute(cr *routeprismv1alpha1.ContextRoute, target *corev1.Servi
 	}
 }
 
-// renderETHTTPRoute produces the EdgeTranslation HTTPRoute attached to the
+// renderETHTTPRoute produces the EdgeTransformation HTTPRoute attached to the
 // target Service. The route is a single catch-all that sends every request
 // to the translator. The translator forwards directly to a Pod IP (target
 // or variant) so it never re-enters the mesh for the same target — no
 // loop, no need for a "checked-marker" bypass rule.
-func renderETHTTPRoute(et *routeprismv1alpha1.EdgeTranslation, target *corev1.Service) *gwv1.HTTPRoute {
+func renderETHTTPRoute(et *routeprismv1alpha1.EdgeTransformation, target *corev1.Service) *gwv1.HTTPRoute {
 	parentKind := gwv1.Kind("Service")
 	coreGroup := gwv1.Group("")
 	translatorPort := gwv1.PortNumber(80)
@@ -158,10 +169,10 @@ func renderETHTTPRoute(et *routeprismv1alpha1.EdgeTranslation, target *corev1.Se
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      httpRouteNameForET(target.Name),
 			Namespace: target.Namespace,
-			Labels:    httpRouteLabels(KindEdgeTranslation, et.Name),
+			Labels:    httpRouteLabels(KindEdgeTransformation, et.Name),
 			OwnerReferences: []metav1.OwnerReference{{
 				APIVersion:         routeprismv1alpha1.GroupVersion.String(),
-				Kind:               "EdgeTranslation",
+				Kind:               "EdgeTransformation",
 				Name:               et.Name,
 				UID:                et.UID,
 				Controller:         ptr(true),

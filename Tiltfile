@@ -63,11 +63,38 @@ print("→ detected mesh platform: %s" % PLATFORM)
 #    the binaries on disk; resource_deps only orders deploy, not image
 #    build. (sample-tier is the tiny HTTP forwarder used by the 3-tier
 #    devloop sample to chain web→api→db.)
+print("→ initial dashboard build → internal/dashboard/dist ...")
+local("cd web && pnpm install --prefer-offline && pnpm build", echo_off = False)
+print("→ initial widget build → internal/widget/dist ...")
+local("cd web/widget && pnpm install --prefer-offline && pnpm build", echo_off = False)
 print("→ initial Go build → bin/manager-linux, bin/sample-tier-linux ...")
 local("CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/manager-linux cmd/main.go",
       echo_off = False)
 local("CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/sample-tier-linux ./cmd/sample-tier",
       echo_off = False)
+
+# Watch the web sources and rebuild the embedded dashboard. The output
+# lands in internal/dashboard/dist, which the manager-compile resource
+# already watches via its `internal` dep, so a frontend edit chains
+# through to a new manager binary automatically.
+local_resource(
+    "dashboard-compile",
+    cmd = "cd web && pnpm build",
+    deps = ["web/src", "web/index.html", "web/vite.config.ts", "web/package.json"],
+    ignore = ["web/node_modules", "web/dist", "web/widget"],
+    labels = ["dev"],
+)
+
+# Watch widget sources and rebuild the embedded widget bundle. Output lands
+# in internal/widget/dist, which manager-compile picks up via its `internal`
+# dep so a widget edit chains to a fresh manager binary.
+local_resource(
+    "widget-compile",
+    cmd = "cd web/widget && pnpm build",
+    deps = ["web/widget/src", "web/widget/index.html", "web/widget/vite.config.ts", "web/widget/package.json"],
+    ignore = ["web/widget/node_modules"],
+    labels = ["dev"],
+)
 
 # Watch Go sources for incremental rebuilds. When these fire, the
 # corresponding binary changes and docker_build (which watches it via
@@ -76,6 +103,7 @@ local_resource(
     "manager-compile",
     cmd = "CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/manager-linux cmd/main.go",
     deps = ["cmd/main.go", "api", "internal", "go.mod", "go.sum"],
+    resource_deps = ["dashboard-compile", "widget-compile"],
     labels = ["dev"],
 )
 local_resource(
@@ -122,60 +150,68 @@ k8s_resource(
     new_name = "controller",
     labels = ["dev"],
     resource_deps = ["manager-compile"],
+    # 8082 → routing API + Prometheus exporter (/metrics).
+    # http://localhost:8082/metrics, http://localhost:8082/api/v1/service
+    port_forwards = ["8082:8082"],
 )
 
 # 5) Apply demo workloads + sample CRs. The sample is a 3-tier topology
-#    (web → api → db), each tier with stable + canary, ContextRoute, and a
-#    smart-mode EdgeTranslation. Tilt auto-groups Deployments-as-workloads
-#    and pulls matching Services into them; the ungrouped objects
-#    (Namespace + CRs) need explicit assignment.
+#    (web → api → db); each tier has stable + canary, a ContextRoute, and
+#    a router-mode EdgeTransformation so cookie-based variant selection
+#    works at every hop. Tilt auto-groups Deployments-as-workloads and
+#    pulls matching Services into them; the ungrouped objects (Namespace
+#    + CRs) need explicit assignment.
 #
-# Port forwards (one per Service so each can be curl'd from the host):
-#   web 8080  /  web-canary 8090
-#   api 8081  /  api-canary 8091
-#   db  8082  /  db-canary  8092
+# Demo entry points (no Tilt port-forward — the kind cluster publishes
+# NodePort 30080/30081/30083 on host-ports 8080/8081/8083 via
+# extraPortMappings, so traffic enters via the Service IP and goes
+# through the mesh's HTTPRoute / translator chain. That's what makes the
+# entry tier honor the cookie. `kubectl port-forward` to a pod skips the
+# mesh and would always hit stable.):
 #
-# Each tier independently routes by cookie x-route-prism=<tier>-canary:
-#   curl                                         http://localhost:8080  → web stable
-#   curl -H 'Cookie: x-route-prism=web-canary'   http://localhost:8080  → web canary
-#   curl                                         http://localhost:8081  → api stable
-#   curl -H 'Cookie: x-route-prism=api-canary'   http://localhost:8081  → api canary
-#   curl                                         http://localhost:8082  → db  stable
-#   curl -H 'Cookie: x-route-prism=db-canary'    http://localhost:8082  → db  canary
+#   open http://localhost:8080/                                       → web HTML console (with widget)
+#   curl                                       http://localhost:8080/api  → web stable chain
+#   curl -H 'Cookie: x-route-prism=demo.web:web-canary'  http://localhost:8080/api  → web canary
+#   curl                                       http://localhost:8081/api  → api direct
+#   curl                                       http://localhost:8083/api  → db direct
 k8s_yaml("test/devloop/sample.yaml")
 
-DEMO_TIERS = [
-    # (name, stable_port, canary_port)
-    ("web", 8080, 8090),
-    ("api", 8081, 8091),
-    ("db",  8082, 8092),
-]
-for tier, stable_port, canary_port in DEMO_TIERS:
+DEMO_TIERS = ["web", "api", "db"]
+for tier in DEMO_TIERS:
     k8s_resource(
         workload = tier,
-        port_forwards = ["%d:80" % stable_port],
         labels = ["dev"],
         resource_deps = ["controller", "sample-tier-compile"],
     )
     k8s_resource(
         workload = tier + "-canary",
-        port_forwards = ["%d:80" % canary_port],
         labels = ["dev"],
         resource_deps = ["controller", "sample-tier-compile"],
     )
 
-# All non-workload objects (Namespace + 3× ContextRoute + 3× EdgeTranslation)
-# in a single grouped resource so the Tilt UI stays compact.
+# Edge proxy nginx: hostPorts (30080/30081/30083) proxy each tier's
+# Service so external traffic enters via ClusterIP and triggers the
+# GAMMA HTTPRoute / translator chain. kind extraPortMappings re-export
+# these as host:8080/8081/8083.
+k8s_resource(
+    workload = "demo-edge",
+    labels = ["dev"],
+    resource_deps = ["controller"],
+)
+
+# All non-workload objects (Namespace + 3× ContextRoute + 2× EdgeTransformation)
+# in a single grouped resource so the Tilt UI stays compact. db has no ET
+# — its ContextRoute-rendered HTTPRoute matches baggage on its own.
 k8s_resource(
     new_name = "demo-objects",
     objects = [
         "demo:Namespace:default",
+        "demo-edge-conf:ConfigMap:demo",
         "web-route:ContextRoute:demo",
         "api-route:ContextRoute:demo",
         "db-route:ContextRoute:demo",
-        "web-edge:EdgeTranslation:demo",
-        "api-edge:EdgeTranslation:demo",
-        "db-edge:EdgeTranslation:demo",
+        "web-edge:EdgeTransformation:demo",
+        "api-edge:EdgeTransformation:demo",
     ],
     labels = ["dev"],
     resource_deps = ["controller"],
@@ -248,6 +284,51 @@ local_resource(
     auto_init = False,
     trigger_mode = TRIGGER_MODE_MANUAL,
     labels = ["e2e"],
+)
+
+# Background sweeper: periodically prune dangling container images that
+# accumulate as Tilt rebuilds `controller` / `route-prism-sample-tier` and
+# re-runs `kind load docker-image`. Each load tags the new image with the
+# same name and leaves the previous SHA dangling — both on the host Docker
+# daemon AND inside the kind node's containerd image store, which has no
+# automatic GC. Over a long `tilt up` session this inflates the kind node
+# container's RSS and disk footprint (visible from the host as growing
+# memory use).
+#
+# Implemented as `serve_cmd` so Tilt keeps the loop alive for the lifetime
+# of `tilt up` and SIGTERMs it on shutdown. The first sweep waits one full
+# interval to avoid racing the initial image build/load.
+PRUNE_INTERVAL_SECONDS = 300
+local_resource(
+    "prune-images",
+    serve_cmd = """
+set -eu
+NODE="route-prism-control-plane"
+INTERVAL=%d
+
+echo "[prune-images] sweeper started; interval=${INTERVAL}s, node=${NODE}"
+while true; do
+    sleep "$INTERVAL"
+    ts="$(date '+%%Y-%%m-%%dT%%H:%%M:%%S')"
+
+    if ! docker inspect -f '{{.State.Running}}' "$NODE" >/dev/null 2>&1; then
+        echo "[$ts] kind node $NODE not running; skipping sweep"
+        continue
+    fi
+
+    before=$(docker exec "$NODE" crictl images -q 2>/dev/null | wc -l)
+    docker exec "$NODE" crictl rmi --prune >/dev/null 2>&1 || true
+    after=$(docker exec "$NODE" crictl images -q 2>/dev/null | wc -l)
+
+    host_pruned=$(docker image prune -f --filter "dangling=true" 2>/dev/null \\
+        | awk '/Total reclaimed space/ {print $0}')
+
+    mem=$(docker stats --no-stream --format '{{.MemUsage}}' "$NODE" 2>/dev/null || echo "?")
+
+    echo "[$ts] kind-node images ${before}→${after}; host: ${host_pruned:-nothing}; node mem: ${mem}"
+done
+""" % PRUNE_INTERVAL_SECONDS,
+    labels = ["dev"],
 )
 
 # Manual button: emit explicit `kubectl config set-cluster / set-credentials

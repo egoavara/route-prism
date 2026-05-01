@@ -102,14 +102,53 @@ lint-fix: golangci-lint ## Run golangci-lint linter and perform fixes
 lint-config: golangci-lint ## Verify golangci-lint linter configuration
 	"$(GOLANGCI_LINT)" config verify
 
+##@ Web
+
+PNPM ?= pnpm
+WEB_DIR := web
+
+.PHONY: web-install
+web-install: ## Install web dashboard dependencies.
+	cd "$(WEB_DIR)" && $(PNPM) install --frozen-lockfile
+
+.PHONY: web-build
+web-build: ## Build the embedded web dashboard into internal/dashboard/dist.
+	cd "$(WEB_DIR)" && $(PNPM) install --prefer-offline && $(PNPM) build
+
+.PHONY: web-dev
+web-dev: ## Run the dashboard dev server (proxies /api to localhost:8082).
+	cd "$(WEB_DIR)" && $(PNPM) dev
+
+.PHONY: web-clean
+web-clean: ## Remove the embedded dashboard bundle.
+	rm -rf internal/dashboard/dist/assets internal/dashboard/dist/index.html internal/dashboard/dist/favicon.svg internal/dashboard/dist/icons.svg
+
+WIDGET_DIR := web/widget
+
+.PHONY: widget-install
+widget-install: ## Install widget bundle dependencies.
+	cd "$(WIDGET_DIR)" && $(PNPM) install --frozen-lockfile
+
+.PHONY: widget-build
+widget-build: ## Build the embedded in-page widget into internal/widget/dist.
+	cd "$(WIDGET_DIR)" && $(PNPM) install --prefer-offline && $(PNPM) build
+
+.PHONY: widget-dev
+widget-dev: ## Run the widget dev server (proxies /api to localhost:8082).
+	cd "$(WIDGET_DIR)" && $(PNPM) dev
+
+.PHONY: widget-clean
+widget-clean: ## Remove the embedded widget bundle.
+	find internal/widget/dist -type f ! -name '.gitkeep' -delete
+
 ##@ Build
 
 .PHONY: build
-build: manifests generate fmt vet ## Build manager binary.
+build: manifests generate fmt vet web-build widget-build ## Build manager binary.
 	go build -o bin/manager cmd/main.go
 
 .PHONY: run
-run: manifests generate fmt vet ## Run a controller from your host.
+run: manifests generate fmt vet web-build widget-build ## Run a controller from your host.
 	go run ./cmd/main.go
 
 # If you wish to build the manager image targeting other platforms you can use the --platform flag.

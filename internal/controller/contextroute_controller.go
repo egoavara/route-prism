@@ -48,7 +48,27 @@ const (
 	EventReasonMissingAppProtocol   = "MissingAppProtocol"
 	EventReasonHTTPRouteApplyFailed = "HTTPRouteApplyFailed"
 	EventReasonHTTPRouteRejected    = "HTTPRouteRejected"
+	// EventReasonUnsupportedTargetType fires when the target Service's
+	// spec.type is something other than ClusterIP (or unset, which
+	// defaults to ClusterIP). GAMMA HTTPRoutes only attach to ClusterIP
+	// Services on Cilium / Istio — NodePort, LoadBalancer, ExternalName
+	// silently leave the HTTPRoute with an empty status and routing
+	// falls through to the Service's plain selector.
+	EventReasonUnsupportedTargetType = "UnsupportedTargetType"
 )
+
+// gammaSupportedServiceType returns true when svc.Spec.Type is a value
+// that GAMMA-enabled meshes will attach an HTTPRoute to. ClusterIP (or
+// the implicit default of an empty string) is the only currently
+// supported parent kind.
+func gammaSupportedServiceType(svc *corev1.Service) bool {
+	switch svc.Spec.Type {
+	case "", corev1.ServiceTypeClusterIP:
+		return true
+	default:
+		return false
+	}
+}
 
 // ContextRouteReconciler reconciles a ContextRoute object.
 type ContextRouteReconciler struct {
@@ -60,7 +80,7 @@ type ContextRouteReconciler struct {
 // +kubebuilder:rbac:groups=route-prism.egoavara.net,resources=contextroutes,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=route-prism.egoavara.net,resources=contextroutes/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=route-prism.egoavara.net,resources=contextroutes/finalizers,verbs=update
-// +kubebuilder:rbac:groups=route-prism.egoavara.net,resources=edgetranslations,verbs=get;list;watch
+// +kubebuilder:rbac:groups=route-prism.egoavara.net,resources=edgetransformations,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch;update
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch;create;update;patch;delete
@@ -179,6 +199,15 @@ func (r *ContextRouteReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			target.Name)
 	}
 
+	if !gammaSupportedServiceType(&target) {
+		msg := fmt.Sprintf(
+			"target Service %q has spec.type=%q; GAMMA HTTPRoutes attach only to ClusterIP Services, so cookie/baggage routing will silently fall through to the Service's plain selector",
+			target.Name, target.Spec.Type)
+		r.event(&cr, corev1.EventTypeWarning, EventReasonUnsupportedTargetType, "%s", msg)
+		setReadyCondition(&cr, false, EventReasonUnsupportedTargetType, msg)
+		return ctrl.Result{}, r.Status().Update(ctx, &cr)
+	}
+
 	// 3) Resolve variants.
 	selector, err := metav1.LabelSelectorAsSelector(&cr.Spec.Variants.Selector)
 	if err != nil {
@@ -204,12 +233,12 @@ func (r *ContextRouteReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			"variant selector %q matched no Services (excluding the target).", selector.String())
 	}
 
-	// 4) Apply HTTPRoute — but only when no EdgeTranslation attaches to
-	// the same target. When one does, the EdgeTranslation reconciler
+	// 4) Apply HTTPRoute — but only when no EdgeTransformation attaches to
+	// the same target. When one does, the EdgeTransformation reconciler
 	// renders a "smart" translator that does the variant routing itself
 	// (forwarding to Pod IPs). In that case we MUST NOT also emit a
 	// HTTPRoute here, because the translator would loop back through it.
-	hasET, err := r.hasEdgeTranslationOnTarget(ctx, cr.Namespace, target.Name)
+	hasET, err := r.hasEdgeTransformationOnTarget(ctx, cr.Namespace, target.Name)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -237,8 +266,8 @@ func (r *ContextRouteReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	cr.Status.MatchedVariants = int32(len(variantNames))
 	cr.Status.VariantServices = variantNames
 	if hasET {
-		setReadyCondition(&cr, true, "DelegatedToEdgeTranslation",
-			"An EdgeTranslation owns routing for this target via smart-mode translator; no HTTPRoute emitted by ContextRoute.")
+		setReadyCondition(&cr, true, "DelegatedToEdgeTransformation",
+			"An EdgeTransformation owns routing for this target via smart-mode translator; no HTTPRoute emitted by ContextRoute.")
 	} else {
 		setReadyCondition(&cr, true, "Reconciled", "HTTPRoute applied.")
 	}
@@ -253,7 +282,7 @@ func (r *ContextRouteReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			httpRouteNameForCR(target.Name), target.Name, len(variantNames), variantNames)
 	} else {
 		r.event(&cr, corev1.EventTypeNormal, EventReasonReconciled,
-			"Routing delegated to EdgeTranslation on target %q (smart mode); %d variant(s) contributed: %v",
+			"Routing delegated to EdgeTransformation on target %q (smart mode); %d variant(s) contributed: %v",
 			target.Name, len(variantNames), variantNames)
 	}
 	return ctrl.Result{}, nil
@@ -292,8 +321,8 @@ func (r *ContextRouteReconciler) resolveOwner(ctx context.Context, cr *routepris
 	return &candidates[0], nil
 }
 
-func (r *ContextRouteReconciler) hasEdgeTranslationOnTarget(ctx context.Context, ns, target string) (bool, error) {
-	var list routeprismv1alpha1.EdgeTranslationList
+func (r *ContextRouteReconciler) hasEdgeTransformationOnTarget(ctx context.Context, ns, target string) (bool, error) {
+	var list routeprismv1alpha1.EdgeTransformationList
 	if err := r.List(ctx, &list, client.InNamespace(ns)); err != nil {
 		return false, err
 	}
@@ -417,10 +446,10 @@ func (r *ContextRouteReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return out
 	}
 
-	// EdgeTranslation on the same target affects whether CR includes its
+	// EdgeTransformation on the same target affects whether CR includes its
 	// catch-all rule, so requeue affected CRs when ETs change.
 	mapETToCR := func(ctx context.Context, obj client.Object) []reconcile.Request {
-		et, ok := obj.(*routeprismv1alpha1.EdgeTranslation)
+		et, ok := obj.(*routeprismv1alpha1.EdgeTransformation)
 		if !ok {
 			return nil
 		}
@@ -453,7 +482,7 @@ func (r *ContextRouteReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&routeprismv1alpha1.ContextRoute{}).
 		Watches(&corev1.Service{}, handler.EnqueueRequestsFromMapFunc(mapServiceToCRs), builder.WithPredicates()).
-		Watches(&routeprismv1alpha1.EdgeTranslation{}, handler.EnqueueRequestsFromMapFunc(mapETToCR), builder.WithPredicates()).
+		Watches(&routeprismv1alpha1.EdgeTransformation{}, handler.EnqueueRequestsFromMapFunc(mapETToCR), builder.WithPredicates()).
 		Watches(&gwv1.HTTPRoute{}, handler.EnqueueRequestsFromMapFunc(mapHTTPRouteToCR), builder.WithPredicates()).
 		Named("contextroute").
 		Complete(r)

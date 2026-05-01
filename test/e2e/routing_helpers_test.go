@@ -255,10 +255,10 @@ func applyContextRoute(ctx context.Context, ns, name, target string, variantSele
 	})
 }
 
-func applyEdgeTranslation(ctx context.Context, ns, name, target, mode, sourceCookie string) {
-	et := &routeprismv1alpha1.EdgeTranslation{
+func applyEdgeTransformation(ctx context.Context, ns, name, target, mode, sourceCookie string) {
+	et := &routeprismv1alpha1.EdgeTransformation{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
-		Spec: routeprismv1alpha1.EdgeTranslationSpec{
+		Spec: routeprismv1alpha1.EdgeTransformationSpec{
 			Mode:         routeprismv1alpha1.EdgeMode(mode),
 			SourceCookie: sourceCookie,
 			Target: routeprismv1alpha1.TargetReference{
@@ -267,7 +267,7 @@ func applyEdgeTranslation(ctx context.Context, ns, name, target, mode, sourceCoo
 		},
 	}
 	createOrPatch(ctx, et, func(o client.Object) {
-		got := o.(*routeprismv1alpha1.EdgeTranslation)
+		got := o.(*routeprismv1alpha1.EdgeTransformation)
 		got.Spec = et.Spec
 	})
 }
@@ -307,7 +307,7 @@ func readyConditions(obj client.Object) []metav1.Condition {
 	switch v := obj.(type) {
 	case *routeprismv1alpha1.ContextRoute:
 		return v.Status.Conditions
-	case *routeprismv1alpha1.EdgeTranslation:
+	case *routeprismv1alpha1.EdgeTransformation:
 		return v.Status.Conditions
 	}
 	return nil

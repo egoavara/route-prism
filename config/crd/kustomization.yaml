@@ -3,7 +3,7 @@
 # It should be run by config/default
 resources:
 - bases/route-prism.egoavara.net_contextroutes.yaml
-- bases/route-prism.egoavara.net_edgetranslations.yaml
+- bases/route-prism.egoavara.net_edgetransformations.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patches:

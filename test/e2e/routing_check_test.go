@@ -8,7 +8,7 @@ Copyright 2026.
 // namespace that Tilt deploys via test/devloop/sample.yaml.
 //
 // Topology recap: web → api → db, each tier identical (sample-tier
-// forwarder + ContextRoute + smart-mode EdgeTranslation). The forwarder
+// forwarder + ContextRoute + smart-mode EdgeTransformation). The forwarder
 // propagates the inbound Cookie + Baggage to its NEXT_HOP, so a single
 // GET against `web` returns a nested chain JSON with one hop per tier.
 //
@@ -18,7 +18,7 @@ Copyright 2026.
 // failure at any tier shows up with concrete request/expected/observed
 // per hop.
 //
-// Cookie semantics: every tier's EdgeTranslation reads the same cookie
+// Cookie semantics: every tier's EdgeTransformation reads the same cookie
 // name `x-route-prism`. The cookie value is the variant Service name to
 // fork to. Only the tier whose variants list contains a Service named
 // after the cookie value forks — other tiers fall through to default.
@@ -170,7 +170,7 @@ var _ = Describe("devloop smoke (3-tier chain)", Label("check"), Ordered, func()
 		// into one ephemeral pod so we pay cluster-curl warm-up once.
 		probesIn := make([]Probe, 0, len(chainScenarios))
 		for _, s := range chainScenarios {
-			p := Probe{Tag: s.name, URL: "http://" + webHost + "/"}
+			p := Probe{Tag: s.name, URL: "http://" + webHost + "/api"}
 			if s.cookie != "" {
 				p.Headers = []string{"Cookie: " + s.cookie}
 			}
@@ -193,7 +193,7 @@ var _ = Describe("devloop smoke (3-tier chain)", Label("check"), Ordered, func()
 			if s.cookie != "" {
 				cookieDesc = "Cookie: " + s.cookie
 			}
-			req := fmt.Sprintf("GET http://%s/  %s", webHost, cookieDesc)
+			req := fmt.Sprintf("GET http://%s/api  %s", webHost, cookieDesc)
 
 			expectChainHop(hops, 0, "web", s.wantWeb, req)
 			expectChainHop(hops, 1, "api", s.wantAPI, req)

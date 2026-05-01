@@ -17,8 +17,8 @@ const (
 
 	ManagedByValue = "route-prism"
 
-	KindContextRoute    = "contextroute"
-	KindEdgeTranslation = "edgetranslation"
+	KindContextRoute       = "contextroute"
+	KindEdgeTransformation = "edgetransformation"
 
 	FieldOwnerCR = "route-prism-cr"
 	FieldOwnerET = "route-prism-et"

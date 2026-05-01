@@ -36,14 +36,14 @@ import (
 
 const (
 	// Event reasons (PascalCase, k8s convention).
-	ReasonGAMMASupported       = "MeshGAMMASupported"
-	ReasonGAMMANotAccepted     = "MeshGAMMANotAccepted"
-	ReasonGAMMANoController    = "MeshGAMMANoController"
-	ReasonHTTPRouteCRDMissing  = "HTTPRouteCRDMissing"
-	ReasonProbeFailed          = "MeshProbeFailed"
-	ReasonNoMeshDetected       = "NoMeshDetected"
-	ReasonUnsupportedMeshVer   = "UnsupportedMeshVersion"
-	ReasonExperimentalMeshVer  = "ExperimentalMeshVersion"
+	ReasonGAMMASupported      = "MeshGAMMASupported"
+	ReasonGAMMANotAccepted    = "MeshGAMMANotAccepted"
+	ReasonGAMMANoController   = "MeshGAMMANoController"
+	ReasonHTTPRouteCRDMissing = "HTTPRouteCRDMissing"
+	ReasonProbeFailed         = "MeshProbeFailed"
+	ReasonNoMeshDetected      = "NoMeshDetected"
+	ReasonUnsupportedMeshVer  = "UnsupportedMeshVersion"
+	ReasonExperimentalMeshVer = "ExperimentalMeshVersion"
 
 	// Resource naming.
 	probeNamePrefix = "route-prism-preflight-"
@@ -176,9 +176,9 @@ func (r *Runner) liveProbe(ctx context.Context, c client.Client) probeResult {
 	}
 	hr := &gwv1.HTTPRoute{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: ns,
-			Labels:    svc.Labels,
+			Name:            name,
+			Namespace:       ns,
+			Labels:          svc.Labels,
 			OwnerReferences: r.ownerRefs(),
 		},
 		Spec: gwv1.HTTPRouteSpec{
@@ -357,4 +357,3 @@ func randomSuffix(n int) string {
 	}
 	return hex.EncodeToString(b)[:n]
 }
-

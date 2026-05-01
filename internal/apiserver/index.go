@@ -33,9 +33,37 @@ import (
 //   - resolving the routingKey-conflict winner once per rebuild (older CR
 //     wins, mirroring the controller) so /alternative is just a map hit
 type snapshot struct {
-	targets      []string             // sorted unique routing keys
-	targetsLower []string             // parallel slice, len(targets), lowercase
-	altByTarget  map[string]altEntry  // routingKey → alternatives
+	targets      []string            // sorted unique routing keys
+	targetsLower []string            // parallel slice, len(targets), lowercase
+	altByTarget  map[string]altEntry // routingKey → alternatives
+	metaByTarget map[string]targetMeta
+	// tuples is the flattened (target × alternative) pair list, one entry
+	// per (routing-target, alternative). Sorted by Tuple ascending. Used
+	// by /api/v1/tuple so the widget can search across both axes in a
+	// single round-trip. tuplesLower is the parallel lowercase slice for
+	// case-insensitive substring filtering.
+	tuples      []TupleEntry
+	tuplesLower []string
+}
+
+// TupleEntry is one (target × alternative) pair as exposed on the wire by
+// /api/v1/tuple. The Tuple field is the user-visible search/display key.
+type TupleEntry struct {
+	// Service is "<namespace>/<service-name>" of the target Service.
+	Service string `json:"service"`
+	// Alternative is the variant Service name, or "." (SelfAlternative)
+	// to mean "no override / route to target itself".
+	Alternative string `json:"alternative"`
+	// Tuple is "<service>:<alternative>" — both human-display and
+	// fuzzy-search input.
+	Tuple string `json:"tuple"`
+	// RoutingKey is the Baggage member key clients should set this entry
+	// against (also the multi-tier cookie's per-entry key).
+	RoutingKey string `json:"routingKey"`
+	// SourceCookie is the cookie name an attached EdgeTransformation
+	// lifts into Baggage. Empty when no EdgeTransformation is attached
+	// (the tuple is still routable manually via the Baggage header).
+	SourceCookie string `json:"sourceCookie,omitempty"`
 }
 
 type altEntry struct {
@@ -43,8 +71,21 @@ type altEntry struct {
 	lower []string // parallel slice, len(list), lowercase
 }
 
+// targetMeta carries the routing knobs a client needs to actually steer
+// traffic toward an alternative: the routingKey (Baggage member key /
+// cookie multi-tier sub-key) and the sourceCookie (cookie name an
+// EdgeTransformation lifts into Baggage). sourceCookie is empty when no
+// EdgeTransformation is attached to this target.
+type targetMeta struct {
+	routingKey   string
+	sourceCookie string
+}
+
 // emptySnapshot is the zero-value served before the first rebuild.
-var emptySnapshot = &snapshot{altByTarget: map[string]altEntry{}}
+var emptySnapshot = &snapshot{
+	altByTarget:  map[string]altEntry{},
+	metaByTarget: map[string]targetMeta{},
+}
 
 // Index keeps the latest snapshot accessible to handlers via atomic
 // pointer swap. Readers never block; writers (Rebuild) take only the
@@ -83,6 +124,21 @@ func (i *Index) Rebuild(ctx context.Context) error {
 	if err := i.cli.List(ctx, &crList); err != nil {
 		return err
 	}
+	var etList routeprismv1alpha1.EdgeTransformationList
+	if err := i.cli.List(ctx, &etList); err != nil {
+		return err
+	}
+	// (namespace, target Service name) → sourceCookie. Used to decorate
+	// each owner ContextRoute with the cookie name a client should set
+	// to drive traffic toward an alternative on this target.
+	cookieByService := make(map[string]string, len(etList.Items))
+	for j := range etList.Items {
+		et := &etList.Items[j]
+		if !et.DeletionTimestamp.IsZero() || et.Spec.SourceCookie == "" {
+			continue
+		}
+		cookieByService[et.Namespace+"/"+et.Spec.Target.Service.Name] = et.Spec.SourceCookie
+	}
 
 	// Resolve owner per routingKey: older creationTimestamp wins; ties by name.
 	owners := make(map[string]*routeprismv1alpha1.ContextRoute, len(crList.Items))
@@ -111,18 +167,43 @@ func (i *Index) Rebuild(ctx context.Context) error {
 	}
 
 	altMap := make(map[string]altEntry, len(owners))
+	metaMap := make(map[string]targetMeta, len(owners))
+	var tuples []TupleEntry
 	for key, owner := range owners {
 		entry, err := i.buildAltEntry(ctx, owner)
 		if err != nil {
 			return err
 		}
 		altMap[key] = entry
+		cookie := cookieByService[owner.Namespace+"/"+owner.Spec.Target.Service.Name]
+		metaMap[key] = targetMeta{
+			routingKey:   key,
+			sourceCookie: cookie,
+		}
+		service := owner.Namespace + "/" + owner.Spec.Target.Service.Name
+		for _, alt := range entry.list {
+			tuples = append(tuples, TupleEntry{
+				Service:      service,
+				Alternative:  alt,
+				Tuple:        service + ":" + alt,
+				RoutingKey:   key,
+				SourceCookie: cookie,
+			})
+		}
+	}
+	sort.Slice(tuples, func(i, j int) bool { return tuples[i].Tuple < tuples[j].Tuple })
+	tuplesLower := make([]string, len(tuples))
+	for j, t := range tuples {
+		tuplesLower[j] = strings.ToLower(t.Tuple)
 	}
 
 	i.snap.Store(&snapshot{
 		targets:      targets,
 		targetsLower: targetsLower,
 		altByTarget:  altMap,
+		metaByTarget: metaMap,
+		tuples:       tuples,
+		tuplesLower:  tuplesLower,
 	})
 	return nil
 }

@@ -1,4 +1,18 @@
-# Build the manager binary
+# Build the embedded dashboard + widget bundles. Each Vite project emits
+# into a sibling internal/<pkg>/dist directory relative to its own root.
+FROM node:24-alpine AS web-builder
+WORKDIR /workspace
+RUN corepack enable
+COPY web/package.json web/pnpm-lock.yaml* ./web/
+COPY web/widget/package.json web/widget/pnpm-lock.yaml* ./web/widget/
+RUN cd web && (pnpm install --frozen-lockfile || pnpm install)
+RUN cd web/widget && (pnpm install --frozen-lockfile || pnpm install)
+COPY web/ ./web/
+RUN mkdir -p internal/dashboard internal/widget && \
+    cd web && pnpm build && \
+    cd ../web/widget && pnpm build
+
+# Build the manager binary.
 FROM golang:1.25 AS builder
 ARG TARGETOS
 ARG TARGETARCH
@@ -13,6 +27,9 @@ RUN go mod download
 
 # Copy the Go source (relies on .dockerignore to filter)
 COPY . .
+# Overlay the freshly built dashboard + widget onto placeholder dist dirs.
+COPY --from=web-builder /workspace/internal/dashboard/dist ./internal/dashboard/dist
+COPY --from=web-builder /workspace/internal/widget/dist ./internal/widget/dist
 
 # Build
 # the GOARCH has no default value to allow the binary to be built according to the host where the command

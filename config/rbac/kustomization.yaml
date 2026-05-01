@@ -22,9 +22,9 @@ resources:
 # default, aiding admins in cluster management. Those roles are
 # not used by the route-prism itself. You can comment the following lines
 # if you do not want those helpers be installed with your Project.
-- edgetranslation_admin_role.yaml
-- edgetranslation_editor_role.yaml
-- edgetranslation_viewer_role.yaml
+- edgetransformation_admin_role.yaml
+- edgetransformation_editor_role.yaml
+- edgetransformation_viewer_role.yaml
 - contextroute_admin_role.yaml
 - contextroute_editor_role.yaml
 - contextroute_viewer_role.yaml

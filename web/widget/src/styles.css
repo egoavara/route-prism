@@ -1,0 +1,361 @@
+/* Scoped to Shadow DOM. Resets are minimal because :host { all: initial } on the wrapper. */
+:host {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 11px;
+  line-height: 1.35;
+  color: #1c1c1c;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+input {
+  font: inherit;
+  color: inherit;
+}
+
+/* Outer host wrapper sets viewport positioning + margins. */
+.rp-root {
+  position: fixed;
+  z-index: 2147483647;
+  pointer-events: none;
+}
+
+.rp-root > * {
+  pointer-events: auto;
+}
+
+/* Anchor positions per (mode × anchor). The four float corners and two
+   sidebar sides each pin against one or two viewport edges and consume
+   the corresponding margin var(s). */
+.rp-mode-float.rp-anchor-bottom-right {
+  bottom: var(--rp-margin-bottom, 16px);
+  right: var(--rp-margin-right, 16px);
+}
+.rp-mode-float.rp-anchor-bottom-left {
+  bottom: var(--rp-margin-bottom, 16px);
+  left: var(--rp-margin-left, 16px);
+}
+.rp-mode-float.rp-anchor-top-right {
+  top: var(--rp-margin-top, 16px);
+  right: var(--rp-margin-right, 16px);
+}
+.rp-mode-float.rp-anchor-top-left {
+  top: var(--rp-margin-top, 16px);
+  left: var(--rp-margin-left, 16px);
+}
+
+.rp-mode-sidebar {
+  top: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+}
+.rp-mode-sidebar.rp-anchor-right {
+  right: 0;
+}
+.rp-mode-sidebar.rp-anchor-left {
+  left: 0;
+}
+
+/* Floating toggle button. */
+.rp-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.7rem;
+  border-radius: 999px;
+  background: #1f1f1f;
+  color: #f5f5f5;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  transition: transform 120ms ease, box-shadow 120ms ease;
+}
+
+.rp-button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.24);
+}
+
+.rp-button .rp-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: #888;
+}
+
+/* Active state — at least one non-`.` entry is set in the cookie. */
+.rp-active .rp-dot {
+  background: #6cf;
+}
+
+.rp-active.rp-button {
+  box-shadow:
+    0 4px 14px rgba(0, 0, 0, 0.18),
+    0 0 0 2px rgba(102, 204, 255, 0.55),
+    0 0 14px rgba(102, 204, 255, 0.4);
+  animation: rp-glow 1.8s ease-in-out infinite;
+}
+
+@keyframes rp-glow {
+  0%,
+  100% {
+    box-shadow:
+      0 4px 14px rgba(0, 0, 0, 0.18),
+      0 0 0 2px rgba(102, 204, 255, 0.55),
+      0 0 12px rgba(102, 204, 255, 0.4);
+  }
+  50% {
+    box-shadow:
+      0 4px 14px rgba(0, 0, 0, 0.18),
+      0 0 0 2px rgba(102, 204, 255, 0.85),
+      0 0 22px rgba(102, 204, 255, 0.7);
+  }
+}
+
+/* Reload-needed state — own-tier variant has drifted from the value the
+   page was rendered against. Yellow takes precedence over the blue active
+   state because the user must reload before any further interaction
+   accurately reflects the current cookie. */
+.rp-needs-reload .rp-dot {
+  background: #f6c544;
+}
+
+.rp-needs-reload.rp-button {
+  box-shadow:
+    0 4px 14px rgba(0, 0, 0, 0.18),
+    0 0 0 2px rgba(246, 197, 68, 0.65),
+    0 0 14px rgba(246, 197, 68, 0.45);
+  animation: rp-glow-reload 1.8s ease-in-out infinite;
+}
+
+@keyframes rp-glow-reload {
+  0%,
+  100% {
+    box-shadow:
+      0 4px 14px rgba(0, 0, 0, 0.18),
+      0 0 0 2px rgba(246, 197, 68, 0.65),
+      0 0 12px rgba(246, 197, 68, 0.45);
+  }
+  50% {
+    box-shadow:
+      0 4px 14px rgba(0, 0, 0, 0.18),
+      0 0 0 2px rgba(246, 197, 68, 0.95),
+      0 0 22px rgba(246, 197, 68, 0.75);
+  }
+}
+
+/* Sidebar tab. */
+.rp-tab {
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  padding: 0.85rem 0.35rem;
+  background: #1f1f1f;
+  color: #f5f5f5;
+  border-radius: 8px 0 0 8px;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.rp-tab.rp-active {
+  box-shadow: -4px 0 12px rgba(102, 204, 255, 0.5);
+}
+
+.rp-tab.rp-needs-reload {
+  box-shadow: -4px 0 12px rgba(246, 197, 68, 0.6);
+}
+
+/* Panel — common to both modes when expanded. */
+.rp-panel {
+  position: absolute;
+  width: 320px;
+  max-height: 70vh;
+  background: #fafafa;
+  border-radius: 10px;
+  box-shadow: 0 16px 32px rgba(0, 0, 0, 0.28);
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.rp-mode-float.rp-anchor-bottom-right .rp-panel {
+  bottom: calc(100% + 8px);
+  right: 0;
+}
+.rp-mode-float.rp-anchor-bottom-left .rp-panel {
+  bottom: calc(100% + 8px);
+  left: 0;
+}
+.rp-mode-float.rp-anchor-top-right .rp-panel {
+  top: calc(100% + 8px);
+  right: 0;
+}
+.rp-mode-float.rp-anchor-top-left .rp-panel {
+  top: calc(100% + 8px);
+  left: 0;
+}
+
+.rp-mode-sidebar.rp-anchor-right .rp-panel {
+  right: calc(100% + 8px);
+  top: 50%;
+  transform: translateY(-50%);
+}
+.rp-mode-sidebar.rp-anchor-left .rp-panel {
+  left: calc(100% + 8px);
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.rp-mode-sidebar.rp-anchor-left .rp-tab {
+  border-radius: 0 8px 8px 0;
+}
+
+.rp-header {
+  padding: 0.45rem 0.6rem;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.rp-search {
+  flex: 1;
+  padding: 0.35rem 0.5rem;
+  background: #fff;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 5px;
+  outline: none;
+  font-size: inherit;
+}
+
+.rp-search:focus {
+  border-color: #6cf;
+  box-shadow: 0 0 0 3px rgba(102, 204, 255, 0.2);
+}
+
+.rp-list {
+  list-style: none;
+  margin: 0;
+  padding: 0.25rem 0;
+  overflow-y: auto;
+  flex: 1;
+}
+
+/* Service group header — non-interactive, clearly separates one service's
+   alternatives from the next so the "pick one of these" semantics read
+   at a glance. */
+.rp-list li.rp-group {
+  padding: 0.5rem 0.6rem 0.2rem 0.6rem;
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: lowercase;
+  color: #555;
+  list-style: none;
+  cursor: default;
+  border-top: 1px solid rgba(0, 0, 0, 0.07);
+}
+
+.rp-list li.rp-group:first-child {
+  border-top: 0;
+}
+
+.rp-list li.rp-group .rp-group-svc {
+  display: inline-block;
+}
+
+/* Alternative row — radio-style dot makes the mutual-exclusion within a
+   service group obvious. Indented under the group header. */
+.rp-list li.rp-alt {
+  position: relative;
+  padding: 0.3rem 0.6rem 0.3rem 1.25rem;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  cursor: pointer;
+  border-left: 3px solid transparent;
+}
+
+.rp-list li.rp-alt:hover,
+.rp-list li.rp-alt.rp-cursor {
+  background: rgba(102, 204, 255, 0.12);
+}
+
+.rp-radio {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  border: 1.5px solid #b3b3b3;
+  background: transparent;
+  flex-shrink: 0;
+}
+
+.rp-radio.rp-radio-on {
+  border-color: #2f7fdb;
+  background: radial-gradient(circle, #2f7fdb 0 3px, #fff 4px 999px);
+}
+
+.rp-alt-name {
+  flex: 1;
+}
+
+/* Selected row — accent border, tinted background, bold name. Survives
+   independent of cursor hover so the active alternative in each service
+   stays visible while the user navigates. */
+.rp-list li.rp-alt.rp-current {
+  font-weight: 600;
+  background: rgba(56, 142, 233, 0.16);
+  border-left-color: #2f7fdb;
+  color: #15376b;
+}
+
+.rp-list li.rp-alt.rp-current.rp-cursor,
+.rp-list li.rp-alt.rp-current:hover {
+  background: rgba(56, 142, 233, 0.26);
+}
+
+.rp-list mark {
+  background: rgba(255, 220, 0, 0.55);
+  color: inherit;
+  padding: 0;
+}
+
+.rp-empty {
+  padding: 1.5rem 0.75rem;
+  color: #999;
+  text-align: center;
+  font-size: 10px;
+}
+
+.rp-banner {
+  background: #fff8db;
+  border-top: 1px solid rgba(0, 0, 0, 0.06);
+  padding: 0.45rem 0.6rem;
+  font-size: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.rp-banner button {
+  background: #1f1f1f;
+  color: #fff;
+  border-radius: 5px;
+  padding: 0.25rem 0.55rem;
+  font-size: 10px;
+  font-weight: 500;
+}

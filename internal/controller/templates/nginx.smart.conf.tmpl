@@ -29,58 +29,118 @@ http {
         {{- end }}
     }
 
+    {{- if .Widget.Enable }}
+    # ── Widget injection (optional) ───────────────────────────────
+    # widgetInjection.enable=true. The translator (a) injects a
+    # <script> into HTML responses on matching requests, (b) reserves
+    # /{{ .Widget.PathPrefix }}/widget/  for the bundle, and
+    # /{{ .Widget.PathPrefix }}/api/     as a same-origin proxy onto
+    # the operator's read API. This avoids any CORS dance for the
+    # widget JS running on the host page.
+
+    # Resolver isn't needed because we proxy by name to a Service —
+    # nginx resolves it once at startup. The OperatorAPI Service is
+    # exposed by config/default/api_service.yaml.
+    upstream prism_operator_api {
+        server {{ .OperatorAPIAddr }};
+        keepalive 8;
+    }
+
+    # Client-IP gate. When IPs is non-empty, only listed CIDRs evaluate
+    # to 1; everything else is 0. When IPs is empty the gate is disabled
+    # (every source IP evaluates to 1).
+    geo {{ if .Widget.TrustForwardedFor }}$http_x_forwarded_for {{ end }}$prism_widget_ip_match {
+        {{- if .Widget.IPCIDRs }}
+        default 0;
+        {{- range .Widget.IPCIDRs }}
+        {{ . }} 1;
+        {{- end }}
+        {{- else }}
+        default 1;
+        {{- end }}
+    }
+    {{- end }}
+
     server {
         listen 80 default_server;
         server_name _;
 
-        # Parse the cookie once per request:
-        #   - extract our own RoutingKey's value into $prism_my_variant
-        #     (used to pick a variant Pod IP via the map above)
-        #   - convert the entire cookie value into W3C Baggage form for
-        #     downstream propagation, dropping `<k>:.` no-ops.
+        # Resolve the request's routing context once per request:
+        #   - Baggage is the canonical inter-tier wire format (W3C). The
+        #     widget's fetch / XMLHttpRequest override stamps it on every
+        #     outbound call so cross-origin pages — where the browser
+        #     drops the SourceCookie — still arrive with their context.
+        #   - Cookie is the unavoidable-fallback used by plain HTML page
+        #     loads on the entry tier (no JS has run yet to set Baggage).
+        #
+        # Source priority is therefore Baggage → Cookie. We extract our
+        # own RoutingKey's value into $prism_my_variant (drives the
+        # variant Pod IP map above) and also rebuild the outbound Baggage
+        # downstream tiers will read.
         access_by_lua_block {
             local source_cookie  = "{{ .SourceCookie }}"
             local routing_key    = "{{ .RoutingKey }}"
 
-            -- Extract the named cookie's value (RFC 6265-loose).
-            local raw = ""
-            local cookie_hdr = ngx.var.http_cookie or ""
-            for token in string.gmatch(cookie_hdr, "([^;]+)") do
-                local kv = string.gsub(token, "^%s+", "")
-                local eq = string.find(kv, "=", 1, true)
-                if eq then
-                    local k = string.sub(kv, 1, eq - 1)
-                    if k == source_cookie then
-                        raw = string.sub(kv, eq + 1)
-                        break
-                    end
-                end
-            end
-
-            -- Per-tier: pick out the <routingKey>:<value> entry that's
-            -- ours. Default to "" → maps to default Pod IP.
             local mine = ""
             local baggage_parts = {}
-            if raw ~= "" then
-                for entry in string.gmatch(raw, "([^|]+)") do
-                    local colon = string.find(entry, ":", 1, true)
-                    if colon then
-                        local k = string.sub(entry, 1, colon - 1)
-                        local v = string.sub(entry, colon + 1)
-                        if k == routing_key and v ~= "." then
-                            mine = v
-                        end
-                        if v ~= "." then
+
+            -- 1) Try inbound Baggage (W3C: "k=v,k=v;p1=...").
+            local baggage_hdr = ngx.var.http_baggage or ""
+            if baggage_hdr ~= "" then
+                for entry in string.gmatch(baggage_hdr, "([^,]+)") do
+                    -- Strip leading whitespace and any properties after ';'.
+                    entry = string.gsub(entry, "^%s+", "")
+                    local semi = string.find(entry, ";", 1, true)
+                    if semi then entry = string.sub(entry, 1, semi - 1) end
+                    local eq = string.find(entry, "=", 1, true)
+                    if eq then
+                        local k = string.sub(entry, 1, eq - 1)
+                        local v = string.sub(entry, eq + 1)
+                        if v ~= "" and v ~= "." then
+                            if k == routing_key then mine = v end
                             baggage_parts[#baggage_parts + 1] = k .. "=" .. v
                         end
                     end
                 end
             end
+
+            -- 2) Cookie fallback. Only consulted when Baggage produced
+            -- nothing — Baggage is more authoritative because the widget
+            -- override sets it explicitly per-request, while the cookie
+            -- can lag (different SameSite scope, stale value, etc.).
+            if #baggage_parts == 0 then
+                local raw = ""
+                local cookie_hdr = ngx.var.http_cookie or ""
+                for token in string.gmatch(cookie_hdr, "([^;]+)") do
+                    local kv = string.gsub(token, "^%s+", "")
+                    local eq = string.find(kv, "=", 1, true)
+                    if eq then
+                        local k = string.sub(kv, 1, eq - 1)
+                        if k == source_cookie then
+                            raw = string.sub(kv, eq + 1)
+                            break
+                        end
+                    end
+                end
+                if raw ~= "" then
+                    for entry in string.gmatch(raw, "([^|]+)") do
+                        local colon = string.find(entry, ":", 1, true)
+                        if colon then
+                            local k = string.sub(entry, 1, colon - 1)
+                            local v = string.sub(entry, colon + 1)
+                            if v ~= "" and v ~= "." then
+                                if k == routing_key then mine = v end
+                                baggage_parts[#baggage_parts + 1] = k .. "=" .. v
+                            end
+                        end
+                    end
+                end
+            end
+
             ngx.var.prism_my_variant = mine
 
-            -- Reconstruct outbound Baggage. Inbound Baggage is dropped:
-            -- the cookie is the source of truth and we don't want stale
-            -- members from upstream forks bleeding into our hop.
+            -- Re-emit outbound Baggage from whichever source had data
+            -- so downstream tiers see a clean, normalized header.
             if #baggage_parts > 0 then
                 ngx.req.set_header("Baggage", table.concat(baggage_parts, ","))
             else
@@ -91,11 +151,144 @@ http {
         # The lua block above writes into this variable; declare it.
         set $prism_my_variant "";
 
+        {{- if .Widget.Enable }}
+        # Same-origin proxies for the widget bundle and the operator's
+        # read API. Path prefix is configurable per CR; default is
+        # ".route-prism" (leading dot makes app collisions vanishingly
+        # unlikely).
+        location /{{ .Widget.PathPrefix }}/widget/ {
+            proxy_http_version 1.1;
+            proxy_set_header   Host $host;
+            proxy_set_header   Connection "";
+            proxy_pass http://prism_operator_api/widget/;
+        }
+        location /{{ .Widget.PathPrefix }}/api/ {
+            proxy_http_version 1.1;
+            proxy_set_header   Host $host;
+            proxy_set_header   Connection "";
+            proxy_pass http://prism_operator_api/api/;
+        }
+        {{- end }}
+
         location / {
             proxy_http_version 1.1;
             proxy_set_header   Host       $host;
             proxy_set_header   Connection "";
+            {{- if .Widget.Enable }}
+            # Force identity encoding so body_filter sees raw HTML —
+            # the </body> splice only works on plaintext. Cost: a bit
+            # more in-cluster bandwidth. widgetInjection is intended
+            # for dev/QA traffic so this is acceptable.
+            proxy_set_header   Accept-Encoding "identity";
+            {{- end }}
             proxy_pass http://$variant_addr$request_uri;
+
+            {{- if .Widget.Enable }}
+            header_filter_by_lua_block {
+                -- Decide whether to inject this response. All gates are
+                -- AND'd — any failure short-circuits to "don't inject".
+                local function bail() ngx.ctx.prism_inject = false; return end
+
+                -- Only HTML responses.
+                local ct = ngx.header["Content-Type"] or ""
+                if not string.find(string.lower(ct), "text/html", 1, true) then return bail() end
+
+                -- IP gate (geo directive).
+                if (tonumber(ngx.var.prism_widget_ip_match) or 0) ~= 1 then return bail() end
+
+                {{- if .Widget.Methods }}
+                -- Method gate.
+                local method = ngx.req.get_method()
+                local method_ok = false
+                {{- range .Widget.Methods }}
+                if method == "{{ . }}" then method_ok = true end
+                {{- end }}
+                if not method_ok then return bail() end
+                {{- end }}
+
+                {{- if .Widget.PathPrefixes }}
+                -- Path-prefix gate (any of).
+                local uri = ngx.var.uri or ""
+                local path_ok = false
+                {{- range .Widget.PathPrefixes }}
+                if string.sub(uri, 1, {{ len . }}) == "{{ . }}" then path_ok = true end
+                {{- end }}
+                if not path_ok then return bail() end
+                {{- end }}
+
+                {{- if .Widget.HostnamePatterns }}
+                -- Hostname gate (Lua patterns, anchored).
+                local host = ngx.var.host or ""
+                local host_ok = false
+                {{- range .Widget.HostnamePatterns }}
+                if string.match(host, "{{ . }}") then host_ok = true end
+                {{- end }}
+                if not host_ok then return bail() end
+                {{- end }}
+
+                {{- range .Widget.Headers }}
+                do
+                    local v = ngx.req.get_headers()["{{ .Name }}"]
+                    if type(v) == "table" then v = v[1] end
+                    {{- if .Present }}
+                    if v == nil then return bail() end
+                    {{- else if .Regex }}
+                    if v == nil then return bail() end
+                    local m, _ = ngx.re.match(v, [[{{ .Regex }}]], "jo")
+                    if not m then return bail() end
+                    {{- else }}
+                    if v ~= "{{ .Value }}" then return bail() end
+                    {{- end }}
+                end
+                {{- end }}
+
+                {{- range .Widget.Cookies }}
+                do
+                    local v = ngx.var["cookie_{{ .Name }}"]
+                    {{- if .Present }}
+                    if v == nil then return bail() end
+                    {{- else if .Regex }}
+                    if v == nil then return bail() end
+                    local m, _ = ngx.re.match(v, [[{{ .Regex }}]], "jo")
+                    if not m then return bail() end
+                    {{- else }}
+                    if v ~= "{{ .Value }}" then return bail() end
+                    {{- end }}
+                end
+                {{- end }}
+
+                ngx.ctx.prism_inject = true
+                ngx.header["Content-Length"] = nil
+                -- Strip CSP so our same-origin script tag isn't blocked
+                -- by `script-src 'none'` or strict nonce-only policies.
+                -- Document this loudly: widget injection is not for prod.
+                ngx.header["Content-Security-Policy"] = nil
+                ngx.header["Cache-Control"] = "no-store"
+            }
+
+            body_filter_by_lua_block {
+                if not ngx.ctx.prism_inject then return end
+                local chunk = ngx.arg[1]
+                local eof   = ngx.arg[2]
+                ngx.ctx.prism_buf = (ngx.ctx.prism_buf or "") .. (chunk or "")
+                if not eof then
+                    ngx.arg[1] = nil
+                    return
+                end
+                local body = ngx.ctx.prism_buf
+                local tag  = '<script src="/{{ .Widget.PathPrefix }}/widget/widget.js" data-route-prism-config=\'' ..
+                             [[{{ .WidgetConfigJSON }}]] ..
+                             [[' defer></script>]]
+                local lower = string.lower(body)
+                local pos   = lower:find("</body>", 1, true)
+                if pos then
+                    body = body:sub(1, pos - 1) .. tag .. body:sub(pos)
+                else
+                    body = body .. tag
+                end
+                ngx.arg[1] = body
+            }
+            {{- end }}
         }
     }
 }

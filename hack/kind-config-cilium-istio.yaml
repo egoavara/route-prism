@@ -2,6 +2,7 @@
 #
 # - disableDefaultCNI: true       — kindnet off; Cilium owns L3/L4.
 # - kube-proxy STAYS enabled      — no `kubeProxyMode: none` override.
+# - extraPortMappings: see hack/kind-config-cilium.yaml for the rationale.
 #
 # Why kube-proxy is on (unlike pure cilium): Cilium's kube-proxy replacement
 # uses BPF socket-LB to translate Service→Pod at the socket layer, before
@@ -19,3 +20,7 @@ networking:
   disableDefaultCNI: true
 nodes:
 - role: control-plane
+  extraPortMappings:
+  - { containerPort: 30080, hostPort: 8080, protocol: TCP }  # web
+  - { containerPort: 30081, hostPort: 8081, protocol: TCP }  # api
+  - { containerPort: 30083, hostPort: 8083, protocol: TCP }  # db

@@ -13,10 +13,15 @@
 # {tier:web, pod:..., downstream:{tier:api, pod:..., downstream:{tier:db,
 # pod:...}}}, so it's trivially observable which variant served each tier.
 #
-# Each tier has its own ContextRoute + smart-mode EdgeTranslation. Smart
-# mode owns routing for the tier (the ContextRoute delegates), so traffic
-# entering at any tier flows: client → mesh → translator-<tier>-edge →
-# variant Pod IP (selected by the cookie value).
+# Every tier gets a ContextRoute, but only the externally-exposed tiers
+# (web, api) get a router-mode EdgeTransformation. db is a leaf consumed
+# only from inside the cluster, so its ContextRoute alone is enough — the
+# CR-rendered HTTPRoute uses an Envoy-full-match-safe regex on the
+# Baggage header, so cookie-translated routing keys reach the right
+# variant via mesh routing without a translator pod. Traffic entering at
+# web/api flows: client → mesh → translator-<tier>-edge → variant Pod IP
+# (selected by the cookie). For db: client → web translator (cookie →
+# baggage) → ... → mesh → variant Pod IP (selected by baggage).
 #
 # Cookie value uses the multi-key syntax:
 #     x-route-prism=<routingKey>:<variant>|<routingKey>:<variant>|...
@@ -24,13 +29,13 @@
 # tiers in this sample are addressable as demo.web / demo.api / demo.db.
 # A `.` value means "no fork at this tier".
 #
-# Per-tier independent verification from a curl pod inside the cluster:
+# Per-tier independent verification from a curl pod inside the cluster.
+# web's `/` now serves the demo HTML console, so chain calls go through
+# `/api`; api/db answer the chain on either path.
 #
-#   curl http://web/                                                                # all stable
-#   curl -H 'Cookie: x-route-prism=demo.web:web-canary'  http://web/                # web canary
-#   curl -H 'Cookie: x-route-prism=demo.api:api-canary'  http://web/                # api canary
-#   curl -H 'Cookie: x-route-prism=demo.db:db-canary'    http://web/                # db  canary
-#   curl -H 'Cookie: x-route-prism=demo.web:web-canary|demo.db:db-canary' http://web/  # web+db canary
+#   curl http://web/api                                                                # all stable
+#   curl -H 'Cookie: x-route-prism=demo.web:web-canary'  http://web/api                # web canary
+#   curl -H 'Cookie: x-route-prism=demo.api:api-canary'  http://web/api                # api canary
 #
 # Each tier translator reads only the entry whose routingKey matches its
 # own. Unrelated entries are preserved into the outbound Baggage so
@@ -63,8 +68,18 @@ spec:
       - name: tier
         image: route-prism-sample-tier
         env:
-        - { name: TIER,     value: web }
-        - { name: NEXT_HOP, value: "http://api" }
+        - { name: TIER,           value: web }
+        - { name: VARIANT,        value: stable }
+        - { name: NEXT_HOP,       value: "http://api" }
+        - { name: SERVE_PAGE,     value: "true" }
+        - { name: PATH_PREFIX,    value: ".route-prism" }
+        - { name: OPERATOR_URL,   value: "http://route-prism-controller-manager-api.route-prism-system.svc:8082" }
+        - { name: ROUTING_KEY,    value: "demo.web" }
+        - { name: SOURCE_COOKIE,  value: "x-route-prism" }
+        # Cross-origin demo button target. Browser hits this URL via
+        # kind extraPortMapping → demo-edge → api Service → translator
+        # — exercising the widget's fetch override + Baggage path.
+        - { name: CROSS_API_URL,  value: "http://localhost:8081/api" }
         ports: [{ containerPort: 8080 }]
 ---
 apiVersion: apps/v1
@@ -80,14 +95,28 @@ spec:
       - name: tier
         image: route-prism-sample-tier
         env:
-        - { name: TIER,     value: web }
-        - { name: NEXT_HOP, value: "http://api" }
+        - { name: TIER,           value: web }
+        - { name: VARIANT,        value: web-canary }
+        - { name: NEXT_HOP,       value: "http://api" }
+        - { name: SERVE_PAGE,     value: "true" }
+        - { name: PATH_PREFIX,    value: ".route-prism" }
+        - { name: OPERATOR_URL,   value: "http://route-prism-controller-manager-api.route-prism-system.svc:8082" }
+        - { name: ROUTING_KEY,    value: "demo.web" }
+        - { name: SOURCE_COOKIE,  value: "x-route-prism" }
+        - { name: CROSS_API_URL,  value: "http://localhost:8081/api" }
         ports: [{ containerPort: 8080 }]
 ---
 apiVersion: v1
 kind: Service
 metadata: { name: web, namespace: demo, labels: { app: web } }
 spec:
+  # ClusterIP so the GAMMA HTTPRoute (created by route-prism for the
+  # EdgeTransformation) actually attaches and rewrites traffic to the
+  # translator. Cilium GAMMA only applies HTTPRoutes whose parentRef is a
+  # ClusterIP Service — once the Service becomes NodePort the HTTPRoute
+  # status stays empty and cookie-based variant selection silently
+  # bypasses the translator. External access comes through demo-edge
+  # below (a tiny nginx with hostPorts that proxies into the mesh).
   selector: { app: web, variant: stable }
   ports: [{ port: 80, targetPort: 8080, name: http, appProtocol: http }]
 ---
@@ -107,7 +136,7 @@ spec:
     selector: { matchLabels: { app: web } }
 ---
 apiVersion: route-prism.egoavara.net/v1alpha1
-kind: EdgeTranslation
+kind: EdgeTransformation
 metadata: { name: web-edge, namespace: demo }
 spec:
   mode: router
@@ -128,8 +157,11 @@ spec:
       - name: tier
         image: route-prism-sample-tier
         env:
-        - { name: TIER,     value: api }
-        - { name: NEXT_HOP, value: "http://db" }
+        - { name: TIER,               value: api }
+        - { name: VARIANT,            value: stable }
+        - { name: NEXT_HOP,           value: "http://db" }
+        # Allow the cross-origin button on the web demo page to reach us.
+        - { name: CORS_ALLOW_ORIGINS, value: "http://localhost:8080" }
         ports: [{ containerPort: 8080 }]
 ---
 apiVersion: apps/v1
@@ -145,8 +177,10 @@ spec:
       - name: tier
         image: route-prism-sample-tier
         env:
-        - { name: TIER,     value: api }
-        - { name: NEXT_HOP, value: "http://db" }
+        - { name: TIER,               value: api }
+        - { name: VARIANT,            value: api-canary }
+        - { name: NEXT_HOP,           value: "http://db" }
+        - { name: CORS_ALLOW_ORIGINS, value: "http://localhost:8080" }
         ports: [{ containerPort: 8080 }]
 ---
 apiVersion: v1
@@ -172,7 +206,7 @@ spec:
     selector: { matchLabels: { app: api } }
 ---
 apiVersion: route-prism.egoavara.net/v1alpha1
-kind: EdgeTranslation
+kind: EdgeTransformation
 metadata: { name: api-edge, namespace: demo }
 spec:
   mode: router
@@ -192,7 +226,9 @@ spec:
       containers:
       - name: tier
         image: route-prism-sample-tier
-        env: [{ name: TIER, value: db }]
+        env:
+        - { name: TIER,    value: db }
+        - { name: VARIANT, value: stable }
         ports: [{ containerPort: 8080 }]
 ---
 apiVersion: apps/v1
@@ -207,7 +243,9 @@ spec:
       containers:
       - name: tier
         image: route-prism-sample-tier
-        env: [{ name: TIER, value: db }]
+        env:
+        - { name: TIER,    value: db }
+        - { name: VARIANT, value: db-canary }
         ports: [{ containerPort: 8080 }]
 ---
 apiVersion: v1
@@ -232,10 +270,89 @@ spec:
   variants:
     selector: { matchLabels: { app: db } }
 ---
-apiVersion: route-prism.egoavara.net/v1alpha1
-kind: EdgeTranslation
-metadata: { name: db-edge, namespace: demo }
+# ─── Edge proxy: host-port → in-cluster Service IP ──────────────────
+# A tiny nginx pod that listens on hostPort 30080/30081/30083 (kind
+# extraPortMappings expose those as host:8080/8081/8083) and proxies
+# each port to the corresponding Service ClusterIP. Going through the
+# Service IP is what triggers the GAMMA HTTPRoute / translator chain
+# attached to that Service — direct kubectl port-forward to a pod, or
+# NodePort traffic, both bypass GAMMA on Cilium and silently fall back
+# to stable.
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: demo-edge-conf, namespace: demo }
+data:
+  nginx.conf: |
+    worker_processes 1;
+    events { worker_connections 1024; }
+    http {
+      # Resolve Service names against kube-dns lazily so a CR/ET
+      # rebuild that recreates the translator Service doesn't pin nginx
+      # to a stale ClusterIP.
+      resolver kube-dns.kube-system.svc.cluster.local valid=10s ipv6=off;
+      proxy_http_version 1.1;
+      # Pass cookie / baggage as-is so the translator and downstream
+      # tiers keep observing the routing context the user set.
+      proxy_set_header Host $host;
+      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+
+      server {
+        listen 30080;
+        location / {
+          set $upstream "http://web.demo.svc.cluster.local:80";
+          proxy_pass $upstream;
+        }
+      }
+      server {
+        listen 30081;
+        location / {
+          set $upstream "http://api.demo.svc.cluster.local:80";
+          proxy_pass $upstream;
+        }
+      }
+      server {
+        listen 30083;
+        location / {
+          set $upstream "http://db.demo.svc.cluster.local:80";
+          proxy_pass $upstream;
+        }
+      }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: demo-edge, namespace: demo, labels: { app: demo-edge } }
 spec:
-  mode: router
-  sourceCookie: x-route-prism
-  target: { service: { name: db } }
+  replicas: 1
+  selector: { matchLabels: { app: demo-edge } }
+  template:
+    metadata: { labels: { app: demo-edge } }
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:1.27-alpine
+        ports:
+        - { name: web, containerPort: 30080, protocol: TCP }
+        - { name: api, containerPort: 30081, protocol: TCP }
+        - { name: db,  containerPort: 30083, protocol: TCP }
+        volumeMounts:
+        - { name: conf, mountPath: /etc/nginx/nginx.conf, subPath: nginx.conf }
+      volumes:
+      - name: conf
+        configMap: { name: demo-edge-conf }
+---
+# NodePort Service that publishes the edge proxy on the same nodePorts
+# kind extraPortMappings forward (host:8080/8081/8083). NodePort is L4
+# only — its destination is the edge pod, not a GAMMA-attached tier
+# Service, so no HTTPRoute is needed here. The edge pod's nginx then
+# proxies to web/api/db ClusterIPs which IS where GAMMA fires.
+apiVersion: v1
+kind: Service
+metadata: { name: demo-edge, namespace: demo, labels: { app: demo-edge } }
+spec:
+  type: NodePort
+  selector: { app: demo-edge }
+  ports:
+  - { name: web, port: 30080, targetPort: 30080, nodePort: 30080, protocol: TCP }
+  - { name: api, port: 30081, targetPort: 30081, nodePort: 30081, protocol: TCP }
+  - { name: db,  port: 30083, targetPort: 30083, nodePort: 30083, protocol: TCP }

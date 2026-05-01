@@ -11,7 +11,7 @@ Copyright 2026.
 // on AfterSuite to tear down. Nothing depends on the devloop sample.
 //
 //   G1  ContextRoute standalone — Baggage-based fork in the mesh
-//   G3  EdgeTranslation cookie fallback when the cookie value is unknown
+//   G3  EdgeTransformation cookie fallback when the cookie value is unknown
 //   G4  Multiple variants — deterministic rule order + per-variant fork
 //   G7  CR/ET status conditions — Ready/Reason transitions
 //   G8  appProtocol gate — Service without appProtocol on its port emits a
@@ -81,8 +81,8 @@ var _ = Describe("regression", Label("full"), func() {
 		})
 	})
 
-	// ── G3: EdgeTranslation cookie fallback ─────────────────────────
-	Context("G3 EdgeTranslation cookie fallback (unknown cookie value)", Label("g3"), Ordered, func() {
+	// ── G3: EdgeTransformation cookie fallback ─────────────────────────
+	Context("G3 EdgeTransformation cookie fallback (unknown cookie value)", Label("g3"), Ordered, func() {
 		const ns = "e2e-g3"
 		host := "web." + ns + ".svc.cluster.local"
 		var probes []ProbeResult
@@ -92,7 +92,7 @@ var _ = Describe("regression", Label("full"), func() {
 			deployWorkload(suiteCtx, ns, "web", "stable", AppProtoHTTP)
 			deployWorkload(suiteCtx, ns, "web-canary", "canary", AppProtoHTTP)
 			applyContextRoute(suiteCtx, ns, "route", "web", map[string]string{"app": "web"})
-			applyEdgeTranslation(suiteCtx, ns, "edge", "web", "router", "x-route-prism")
+			applyEdgeTransformation(suiteCtx, ns, "edge", "web", "router", "x-route-prism")
 
 			By("translator Deployment becomes Ready")
 			Eventually(func(g Gomega) {
@@ -206,15 +206,15 @@ var _ = Describe("regression", Label("full"), func() {
 			deployWorkload(suiteCtx, ns, "web", "stable", AppProtoHTTP)
 			deployWorkload(suiteCtx, ns, "web-canary", "canary", AppProtoHTTP)
 			applyContextRoute(suiteCtx, ns, "cr-deleg", "web", map[string]string{"app": "web"})
-			applyEdgeTranslation(suiteCtx, ns, "et-router", "web", "router", "x-route-prism")
+			applyEdgeTransformation(suiteCtx, ns, "et-router", "web", "router", "x-route-prism")
 			expectReady(suiteCtx, ns, &routeprismv1alpha1.ContextRoute{
 				ObjectMeta: metav1.ObjectMeta{Name: "cr-deleg", Namespace: ns},
-			}, metav1.ConditionTrue, "DelegatedToEdgeTranslation")
+			}, metav1.ConditionTrue, "DelegatedToEdgeTransformation")
 		})
 
 		It("7c: ET with unimplemented mode (envoy-lua) → Ready=False/ModeNotImplemented", func() {
-			applyEdgeTranslation(suiteCtx, ns, "et-lua", "web", "envoy-lua", "x-route-prism")
-			expectReady(suiteCtx, ns, &routeprismv1alpha1.EdgeTranslation{
+			applyEdgeTransformation(suiteCtx, ns, "et-lua", "web", "envoy-lua", "x-route-prism")
+			expectReady(suiteCtx, ns, &routeprismv1alpha1.EdgeTransformation{
 				ObjectMeta: metav1.ObjectMeta{Name: "et-lua", Namespace: ns},
 			}, metav1.ConditionFalse, "ModeNotImplemented")
 		})
@@ -229,19 +229,19 @@ var _ = Describe("regression", Label("full"), func() {
 			deployWorkload(suiteCtx, ns, "web", "stable", AppProtoNone) // <-- no appProtocol
 			deployWorkload(suiteCtx, ns, "web-canary", "canary", AppProtoHTTP)
 			applyContextRoute(suiteCtx, ns, "cr-noproto", "web", map[string]string{"app": "web"})
-			applyEdgeTranslation(suiteCtx, ns, "et-noproto", "web", "router", "x-route-prism")
+			applyEdgeTransformation(suiteCtx, ns, "et-noproto", "web", "router", "x-route-prism")
 		})
 
 		It("ContextRoute emits MissingAppProtocol Warning Event", func() {
 			expectWarningEvent(suiteCtx, ns, "ContextRoute", "cr-noproto", "MissingAppProtocol")
 		})
-		It("EdgeTranslation emits MissingAppProtocol Warning Event", func() {
-			expectWarningEvent(suiteCtx, ns, "EdgeTranslation", "et-noproto", "MissingAppProtocol")
+		It("EdgeTransformation emits MissingAppProtocol Warning Event", func() {
+			expectWarningEvent(suiteCtx, ns, "EdgeTransformation", "et-noproto", "MissingAppProtocol")
 		})
-		It("CR still reaches Ready=True/DelegatedToEdgeTranslation despite missing appProtocol", func() {
+		It("CR still reaches Ready=True/DelegatedToEdgeTransformation despite missing appProtocol", func() {
 			expectReady(suiteCtx, ns, &routeprismv1alpha1.ContextRoute{
 				ObjectMeta: metav1.ObjectMeta{Name: "cr-noproto", Namespace: ns},
-			}, metav1.ConditionTrue, "DelegatedToEdgeTranslation")
+			}, metav1.ConditionTrue, "DelegatedToEdgeTransformation")
 		})
 	})
 })

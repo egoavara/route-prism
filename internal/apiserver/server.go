@@ -20,6 +20,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	corev1 "k8s.io/api/core/v1"
 	toolscache "k8s.io/client-go/tools/cache"
 	ctrlcache "sigs.k8s.io/controller-runtime/pkg/cache"
@@ -40,6 +42,15 @@ const rebuildDebounce = 100 * time.Millisecond
 type Options struct {
 	// BindAddress is the listen address (e.g. ":8082"). Empty disables the server.
 	BindAddress string
+	// Instrument wraps the chi router with otelhttp so spans/metrics are
+	// emitted using the globally registered providers. Safe to enable even
+	// when OTel is not configured (no-op providers stay quiet).
+	Instrument bool
+	// PromHandler, when non-nil, is mounted at MetricsPath. Lets the OTel
+	// Prometheus exporter share this listener instead of opening its own.
+	PromHandler http.Handler
+	// MetricsPath defaults to "/metrics".
+	MetricsPath string
 }
 
 // Server is a manager.Runnable that:
@@ -98,11 +109,31 @@ func (s *Server) Start(ctx context.Context) error {
 		return nil
 	}
 
-	mux := http.NewServeMux()
-	s.api.Register(mux)
+	router := chi.NewRouter()
+	s.api.Register(router)
+	if s.options.PromHandler != nil {
+		path := s.options.MetricsPath
+		if path == "" {
+			path = "/metrics"
+		}
+		router.Handle(path, s.options.PromHandler)
+	}
+
+	var handler http.Handler = router
+	if s.options.Instrument {
+		handler = otelhttp.NewHandler(router, "route-prism-api",
+			otelhttp.WithSpanNameFormatter(func(_ string, r *http.Request) string {
+				if rc := chi.RouteContext(r.Context()); rc != nil && rc.RoutePattern() != "" {
+					return r.Method + " " + rc.RoutePattern()
+				}
+				return r.Method + " " + r.URL.Path
+			}),
+		)
+	}
+
 	srv := &http.Server{
 		Addr:              s.options.BindAddress,
-		Handler:           mux,
+		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
@@ -148,6 +179,18 @@ func (s *Server) registerEventHandlers(ctx context.Context, deb *debouncer, log 
 		return err
 	}
 	if _, err := svcInf.AddEventHandler(toolscache.ResourceEventHandlerFuncs{
+		AddFunc:    func(_ any) { deb.trigger() },
+		UpdateFunc: func(_, _ any) { deb.trigger() },
+		DeleteFunc: func(_ any) { deb.trigger() },
+	}); err != nil {
+		return err
+	}
+
+	etInf, err := s.cache.GetInformer(ctx, &routeprismv1alpha1.EdgeTransformation{})
+	if err != nil {
+		return err
+	}
+	if _, err := etInf.AddEventHandler(toolscache.ResourceEventHandlerFuncs{
 		AddFunc:    func(_ any) { deb.trigger() },
 		UpdateFunc: func(_, _ any) { deb.trigger() },
 		DeleteFunc: func(_ any) { deb.trigger() },

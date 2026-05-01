@@ -461,9 +461,11 @@ func (p *prefixedWriter) Write(b []byte) (int, error) {
 }
 
 // printMatrix emits a fixed-width matrix table to stdout.
-//   rows    = scenario groups (g1, g3, …) — one extra row "SETUP" surfaces
-//             cluster-lifecycle failures that prevented any group from running.
-//   columns = mesh platforms (cilium, istio, cilium-istio)
+//
+//	rows    = scenario groups (g1, g3, …) — one extra row "SETUP" surfaces
+//	          cluster-lifecycle failures that prevented any group from running.
+//	columns = mesh platforms (cilium, istio, cilium-istio)
+//
 // Each body cell shows PASS/FAIL plus duration.
 func printMatrix(results []PlatformResult, platforms, groups []string) {
 	idx := make(map[string]PlatformResult, len(results))

@@ -18,6 +18,11 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/go-chi/chi/v5"
+
+	"github.com/egoavara/route-prism/internal/dashboard"
+	"github.com/egoavara/route-prism/internal/widget"
 )
 
 const (
@@ -40,24 +45,66 @@ func NewAPI(idx *Index) *API {
 	return &API{idx: idx}
 }
 
-// Register wires API routes onto the provided mux.
-func (a *API) Register(mux *http.ServeMux) {
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
+// Register wires API routes onto the provided chi router.
+func (a *API) Register(r chi.Router) {
+	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	mux.HandleFunc("GET /api/v1/service", a.handleListServices)
-	mux.HandleFunc("GET /api/v1/service/{target}/alternative", a.handleListAlternatives)
+	r.Get("/api/v1/service", a.handleListServices)
+	r.Get("/api/v1/service/{target}/alternative", a.handleListAlternatives)
+	r.Get("/api/v1/tuple", a.handleListTuples)
+	a.registerDashboard(r)
+	a.registerWidget(r)
+}
+
+// registerDashboard mounts the embedded web UI at /dashboard/ and
+// redirects /dashboard → /dashboard/ so relative asset URLs resolve.
+// Defined as a separate method to keep the dashboard import out of the
+// hot read-API path and easy to disable in tests.
+func (a *API) registerDashboard(r chi.Router) {
+	r.Get("/", func(w http.ResponseWriter, req *http.Request) {
+		http.Redirect(w, req, "/dashboard/", http.StatusFound)
+	})
+	r.Get("/dashboard", func(w http.ResponseWriter, req *http.Request) {
+		http.Redirect(w, req, "/dashboard/", http.StatusMovedPermanently)
+	})
+	r.Mount("/dashboard/", http.StripPrefix("/dashboard", dashboard.Handler()))
+}
+
+// registerWidget mounts the embedded in-page widget bundle at /widget/.
+// The translator (with widgetInjection enabled) proxies its configured
+// pathPrefix to this same mount, so the widget JS is always served from
+// the host page's origin (no CORS).
+func (a *API) registerWidget(r chi.Router) {
+	r.Mount("/widget/", http.StripPrefix("/widget", widget.Handler()))
 }
 
 // ServiceItem is a single entry in list responses.
 type ServiceItem struct {
 	Target string `json:"target"`
+	// Translator, when non-empty, is the cookie name an attached
+	// EdgeTransformation lifts into the Baggage header. Surfaced on the
+	// /service list so callers can flag targets that have a translator
+	// without a second round-trip. Empty means no EdgeTransformation.
+	Translator string `json:"translator,omitempty"`
 }
 
 // ListResponse is the wire shape for paginated list endpoints.
 type ListResponse struct {
 	Items      []ServiceItem `json:"items"`
 	NextCursor string        `json:"nextCursor,omitempty"`
+	// Alternative-specific routing context. Populated only by the
+	// /alternative endpoint; omitted from /service list responses.
+	RoutingKey   string `json:"routingKey,omitempty"`
+	SourceCookie string `json:"sourceCookie,omitempty"`
+}
+
+// TupleListResponse is the wire shape for /api/v1/tuple. Items carry
+// fully-populated TupleEntry rows so the widget needs only one round-trip
+// to drive routing.
+type TupleListResponse struct {
+	Items      []TupleEntry `json:"items"`
+	NextCursor string       `json:"nextCursor,omitempty"`
 }
 
 func (a *API) handleListServices(w http.ResponseWriter, r *http.Request) {
@@ -69,11 +116,44 @@ func (a *API) handleListServices(w http.ResponseWriter, r *http.Request) {
 
 	matched := f.apply(snap.targets, snap.targetsLower)
 	page, next := paginate(matched, cursor, limit)
-	writeJSON(w, http.StatusOK, toResponse(page, next))
+	writeJSON(w, http.StatusOK, toServiceListResponse(snap, page, next))
+}
+
+// handleListTuples serves the flattened (target × alternative) view used
+// by the in-page widget. fuzzy is a case-insensitive substring filter on
+// the Tuple field — the widget further refines/highlights with microfuzz
+// client-side, so the server stays simple and deterministic. Pagination
+// uses the same opaque cursor format as /service.
+func (a *API) handleListTuples(w http.ResponseWriter, r *http.Request) {
+	snap := a.idx.Snapshot()
+	q := r.URL.Query()
+	fuzzy := strings.ToLower(q.Get("fuzzy"))
+	limit := parseLimit(q.Get("limit"))
+	cursor := decodeCursor(q.Get("cursor"))
+
+	// Filter (substring) into a fresh slice when fuzzy is set; otherwise
+	// page directly off the snapshot slice.
+	var filtered []TupleEntry
+	if fuzzy == "" {
+		filtered = snap.tuples
+	} else {
+		filtered = make([]TupleEntry, 0, len(snap.tuples))
+		for j, low := range snap.tuplesLower {
+			if strings.Contains(low, fuzzy) {
+				filtered = append(filtered, snap.tuples[j])
+			}
+		}
+	}
+
+	page, next := paginateTuples(filtered, cursor, limit)
+	if page == nil {
+		page = []TupleEntry{}
+	}
+	writeJSON(w, http.StatusOK, TupleListResponse{Items: page, NextCursor: next})
 }
 
 func (a *API) handleListAlternatives(w http.ResponseWriter, r *http.Request) {
-	target := r.PathValue("target")
+	target := chi.URLParam(r, "target")
 	if target == "" {
 		writeError(w, http.StatusBadRequest, "target is required")
 		return
@@ -91,7 +171,14 @@ func (a *API) handleListAlternatives(w http.ResponseWriter, r *http.Request) {
 
 	matched := f.apply(entry.list, entry.lower)
 	page, next := paginate(matched, cursor, limit)
-	writeJSON(w, http.StatusOK, toResponse(page, next))
+	resp := toAlternativeListResponse(page, next)
+	if meta, ok := snap.metaByTarget[target]; ok {
+		resp.RoutingKey = meta.routingKey
+		resp.SourceCookie = meta.sourceCookie
+	} else {
+		resp.RoutingKey = target
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // filter holds the per-request query parameters. All filters are AND-ed.
@@ -117,8 +204,8 @@ func parseFilter(q url.Values) filter {
 //   - equals     — O(log N), one binary search
 //   - startswith — O(log N), two binary searches narrowing to a contiguous range
 //   - fuzzy      — O(K · L), where K = remaining candidates after equals/startswith
-//                  narrowing and L = avg target length. With small K this is
-//                  effectively constant work per request.
+//     narrowing and L = avg target length. With small K this is
+//     effectively constant work per request.
 //
 // The returned slice is either a sub-slice of the snapshot (when no
 // fuzzy filter is applied) or a fresh allocation. Either way it is safe
@@ -211,12 +298,52 @@ func paginate(sorted []string, cursor string, limit int) ([]string, string) {
 	return page, next
 }
 
-func toResponse(page []string, nextCursor string) ListResponse {
+// toServiceListResponse decorates each entry with its translator cookie
+// (if any) so the dashboard can flag ET-backed targets at a glance
+// without a per-row /alternative call.
+func toServiceListResponse(snap *snapshot, page []string, nextCursor string) ListResponse {
+	items := make([]ServiceItem, len(page))
+	for i, t := range page {
+		item := ServiceItem{Target: t}
+		if meta, ok := snap.metaByTarget[t]; ok {
+			item.Translator = meta.sourceCookie
+		}
+		items[i] = item
+	}
+	return ListResponse{Items: items, NextCursor: nextCursor}
+}
+
+// toAlternativeListResponse renders raw alternative names without
+// per-item metadata — alternatives don't carry routing context of their
+// own; the surrounding response carries the routingKey/sourceCookie.
+func toAlternativeListResponse(page []string, nextCursor string) ListResponse {
 	items := make([]ServiceItem, len(page))
 	for i, t := range page {
 		items[i] = ServiceItem{Target: t}
 	}
 	return ListResponse{Items: items, NextCursor: nextCursor}
+}
+
+// paginateTuples mirrors paginate() but works against a sorted []TupleEntry.
+// Cursor is the Tuple string of the last item on the previous page.
+func paginateTuples(sorted []TupleEntry, cursor string, limit int) ([]TupleEntry, string) {
+	startIdx := 0
+	if cursor != "" {
+		startIdx = sort.Search(len(sorted), func(i int) bool { return sorted[i].Tuple >= cursor })
+		if startIdx < len(sorted) && sorted[startIdx].Tuple == cursor {
+			startIdx++
+		}
+	}
+	if startIdx >= len(sorted) {
+		return nil, ""
+	}
+	end := min(startIdx+limit, len(sorted))
+	page := sorted[startIdx:end]
+	var next string
+	if end < len(sorted) && len(page) > 0 {
+		next = encodeCursor(page[len(page)-1].Tuple)
+	}
+	return page, next
 }
 
 func encodeCursor(s string) string {

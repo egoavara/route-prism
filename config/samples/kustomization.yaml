@@ -1,5 +1,5 @@
 ## Append samples of your project ##
 resources:
 - route-prism_v1alpha1_contextroute.yaml
-- route-prism_v1alpha1_edgetranslation.yaml
+- route-prism_v1alpha1_edgetransformation.yaml
 # +kubebuilder:scaffold:manifestskustomizesamples

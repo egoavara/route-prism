@@ -28,3 +28,15 @@ go.work
 
 # Kubeconfig might contain secrets
 *.kubeconfig
+
+# Web dashboard
+web/node_modules/
+web/.vite/
+internal/dashboard/dist/*
+!internal/dashboard/dist/.gitkeep
+
+# In-page widget bundle
+web/widget/node_modules/
+web/widget/.vite/
+internal/widget/dist/*
+!internal/widget/dist/.gitkeep

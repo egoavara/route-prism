@@ -1,4 +1,5 @@
-# This patch adds the args to allow exposing the metrics endpoint using HTTPS
+# This patch adds the args to allow exposing the controller-runtime metrics
+# endpoint using HTTPS. Inserted after the `run` subcommand at index 0.
 - op: add
-  path: /spec/template/spec/containers/0/args/0
-  value: --metrics-bind-address=:8443
+  path: /spec/template/spec/containers/0/args/1
+  value: --metrics.bind-address=:8443

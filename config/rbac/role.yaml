@@ -61,7 +61,7 @@ rules:
   - route-prism.egoavara.net
   resources:
   - contextroutes
-  - edgetranslations
+  - edgetransformations
   verbs:
   - create
   - delete
@@ -80,7 +80,7 @@ rules:
   - route-prism.egoavara.net
   resources:
   - contextroutes/status
-  - edgetranslations/status
+  - edgetransformations/status
   verbs:
   - get
   - patch

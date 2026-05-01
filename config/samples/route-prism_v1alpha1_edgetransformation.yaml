@@ -1,0 +1,31 @@
+apiVersion: route-prism.egoavara.net/v1alpha1
+kind: EdgeTransformation
+metadata:
+  labels:
+    app.kubernetes.io/name: route-prism
+    app.kubernetes.io/managed-by: kustomize
+  name: edgetransformation-sample
+spec:
+  mode: router
+  sourceCookie: x-route-prism
+  target:
+    service:
+      name: web
+  # Optional: inject the in-page widget so users can toggle routing
+  # context from their browser. Defaults are conservative.
+  widgetInjection:
+    enable: false
+    http:
+      pathPrefix: .route-prism
+    target:
+      match:
+        # Empty IPs = inject for everyone. Narrow to a CIDR for
+        # internal-only exposure: ips: ["10.0.0.0/8"].
+        methods: [GET]
+    style:
+      mode: float
+      margin:
+        right: 16px
+        bottom: 16px
+      hotkey:
+        open: ctrl+\
