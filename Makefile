@@ -58,7 +58,7 @@ vet: ## Run go vet against code.
 	go vet ./...
 
 .PHONY: test
-test: manifests generate fmt vet setup-envtest ## Run tests.
+test: manifests generate fmt vet setup-envtest gateway-api-crds ## Run tests.
 	KUBEBUILDER_ASSETS="$(shell "$(ENVTEST)" use $(ENVTEST_K8S_VERSION) --bin-dir "$(LOCALBIN)" -p path)" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
 
 # TODO(user): To use a different vendor for e2e tests, modify the setup under 'tests/e2e'.
@@ -240,6 +240,21 @@ ENVTEST_K8S_VERSION ?= $(shell v='$(call gomodver,k8s.io/api)'; \
   printf '%s\n' "$$v" | sed -E 's/^v?[0-9]+\.([0-9]+).*/1.\1/')
 
 GOLANGCI_LINT_VERSION ?= v2.8.0
+
+# GATEWAY_API_VERSION is the sigs.k8s.io/gateway-api version pinned by go.mod;
+# it determines which standard-install.yaml is fetched for envtest.
+GATEWAY_API_VERSION ?= $(shell v='$(call gomodver,sigs.k8s.io/gateway-api)'; \
+  [ -n "$$v" ] || { echo "Set GATEWAY_API_VERSION manually" >&2; exit 1; }; \
+  printf '%s\n' "$$v")
+GATEWAY_API_INSTALL := $(LOCALBIN)/gateway-api/standard-install.yaml
+
+.PHONY: gateway-api-crds
+gateway-api-crds: $(GATEWAY_API_INSTALL) ## Download Gateway API standard CRDs into bin/gateway-api/.
+$(GATEWAY_API_INSTALL): $(LOCALBIN)
+	@mkdir -p "$(LOCALBIN)/gateway-api"
+	@echo "Downloading Gateway API CRDs ($(GATEWAY_API_VERSION))..."
+	@curl -fsSLo "$@" "https://github.com/kubernetes-sigs/gateway-api/releases/download/$(GATEWAY_API_VERSION)/standard-install.yaml"
+
 .PHONY: kustomize
 kustomize: $(KUSTOMIZE) ## Download kustomize locally if necessary.
 $(KUSTOMIZE): $(LOCALBIN)

@@ -191,7 +191,7 @@ func splitNonEmpty(s string) []string {
 		return nil
 	}
 	out := make([]string, 0)
-	for _, p := range strings.Split(s, ",") {
+	for p := range strings.SplitSeq(s, ",") {
 		p = strings.TrimSpace(p)
 		if p != "" {
 			out = append(out, p)
@@ -221,7 +221,7 @@ func callDownstream(ctx context.Context, target string, in http.Header) (any, er
 	if err != nil {
 		return nil, err
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }()
 
 	body, err := io.ReadAll(res.Body)
 	if err != nil {
@@ -282,7 +282,7 @@ func renderPage(w http.ResponseWriter, tier, variant, pod, pathPrefix, routingKe
 		crossLabelSuffix = "(set CROSS_API_URL)"
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(w, pageTemplate,
+	_, _ = fmt.Fprintf(w, pageTemplate,
 		tier, tier, displayVariant, pod,
 		crossDisabled, crossLabelSuffix, // cross-fetch
 		crossDisabled, crossLabelSuffix, // cross-xhr
@@ -296,6 +296,8 @@ func renderPage(w http.ResponseWriter, tier, variant, pod, pathPrefix, routingKe
 //	cross-fetch [disabled?] attr, cross-fetch label suffix,
 //	cross-xhr   [disabled?] attr, cross-xhr   label suffix,
 //	cross-URL JSON literal, widget src, widget cfg attr.
+//
+//nolint:lll // embedded HTML template intentionally contains long lines
 const pageTemplate = `<!doctype html>
 <html lang="en">
 <head>

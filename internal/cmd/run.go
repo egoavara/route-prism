@@ -203,14 +203,14 @@ func registerControllers(mgr ctrl.Manager, cfg *config.Config) error {
 	if err := (&controller.ContextRouteReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorderFor("contextroute-controller"),
+		Recorder: mgr.GetEventRecorderFor("contextroute-controller"), //nolint:staticcheck // GetEventRecorderFor still required until controller-runtime exposes a 1:1 replacement.
 	}).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("setup ContextRoute controller: %w", err)
 	}
 	if err := (&controller.EdgeTransformationReconciler{
 		Client:          mgr.GetClient(),
 		Scheme:          mgr.GetScheme(),
-		Recorder:        mgr.GetEventRecorderFor("edgetransformation-controller"),
+		Recorder:        mgr.GetEventRecorderFor("edgetransformation-controller"), //nolint:staticcheck // GetEventRecorderFor still required until controller-runtime exposes a 1:1 replacement.
 		OperatorAPIAddr: cfg.API.AdvertisedAddress,
 	}).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("setup EdgeTransformation controller: %w", err)
@@ -218,7 +218,7 @@ func registerControllers(mgr ctrl.Manager, cfg *config.Config) error {
 	if err := (&controller.RemoteRouteReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorderFor("remoteroute-controller"),
+		Recorder: mgr.GetEventRecorderFor("remoteroute-controller"), //nolint:staticcheck // GetEventRecorderFor still required until controller-runtime exposes a 1:1 replacement.
 	}).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("setup RemoteRoute controller: %w", err)
 	}
@@ -273,6 +273,8 @@ func registerPreflight(mgr ctrl.Manager) error {
 // startStandalonePromListener handles the case where the operator wants
 // /metrics on a separate port (e.g. when the API server is disabled, or
 // when network policy treats Prometheus traffic differently).
+//
+//nolint:unparam // signature kept for symmetry / future extensibility
 func startStandalonePromListener(ctx context.Context, cfg config.Otel, obs observability.Result) error {
 	if !cfg.Prometheus.Enabled || obs.PromHandler == nil || cfg.Prometheus.BindAddress == "" {
 		return nil

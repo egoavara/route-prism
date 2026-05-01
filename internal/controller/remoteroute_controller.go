@@ -208,7 +208,7 @@ func (r *RemoteRouteReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 }
 
 func (r *RemoteRouteReconciler) apply(ctx context.Context, obj client.Object) error {
-	return r.Patch(ctx, obj, client.Apply, client.FieldOwner(FieldOwnerRR), client.ForceOwnership)
+	return r.Patch(ctx, obj, client.Apply, client.FieldOwner(FieldOwnerRR), client.ForceOwnership) //nolint:staticcheck // client.Apply replacement requires server-side apply refactor; tracked separately.
 }
 
 // ensureRROwnerRef installs (and if needed updates) the controller
@@ -322,7 +322,7 @@ func (r *RemoteRouteReconciler) fetchClusterDump(ctx context.Context, rr *routep
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		_, _ = io.Copy(io.Discard, resp.Body)
 		return nil, fmt.Errorf("admin returned %s", resp.Status)
@@ -415,7 +415,8 @@ func setRRCondition(rr *routeprismv1alpha1.RemoteRoute, condType string, status 
 	rr.Status.Conditions = append(out, cond)
 }
 
-func (r *RemoteRouteReconciler) event(rr *routeprismv1alpha1.RemoteRoute, eventtype, reason, fmtStr string, args ...interface{}) {
+//nolint:unparam // signature kept for symmetry / future extensibility
+func (r *RemoteRouteReconciler) event(rr *routeprismv1alpha1.RemoteRoute, eventtype, reason, fmtStr string, args ...any) {
 	if r.Recorder == nil {
 		return
 	}

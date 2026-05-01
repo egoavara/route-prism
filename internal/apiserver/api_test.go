@@ -24,6 +24,8 @@ import (
 	routeprismv1alpha1 "github.com/egoavara/route-prism/api/v1alpha1"
 )
 
+const targetDemoWeb = "demo.web"
+
 func newTestAPI(t *testing.T, objs ...runtime.Object) *API {
 	t.Helper()
 	scheme := runtime.NewScheme()
@@ -93,7 +95,7 @@ func TestListServices(t *testing.T) {
 	if got, want := len(resp.Items), 3; got != want {
 		t.Fatalf("items=%d want %d", got, want)
 	}
-	expected := []string{"demo.api", "demo.web", "other.web"}
+	expected := []string{"demo.api", targetDemoWeb, "other.web"}
 	for i, want := range expected {
 		if resp.Items[i].Target != want {
 			t.Errorf("items[%d]=%q want %q", i, resp.Items[i].Target, want)
@@ -108,7 +110,7 @@ func TestListServices_FilterEquals(t *testing.T) {
 		mkCR("b", "demo", "api", "", now),
 	)
 	resp := mustGet(t, api, "/api/v1/service?target.equals=demo.web")
-	if len(resp.Items) != 1 || resp.Items[0].Target != "demo.web" {
+	if len(resp.Items) != 1 || resp.Items[0].Target != targetDemoWeb {
 		t.Fatalf("unexpected: %+v", resp.Items)
 	}
 }
@@ -125,7 +127,7 @@ func TestListServices_FilterStartswith(t *testing.T) {
 	for _, it := range resp.Items {
 		got = append(got, it.Target)
 	}
-	want := []string{"demo.api", "demo.web"}
+	want := []string{"demo.api", targetDemoWeb}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("got %v want %v", got, want)
 	}
@@ -140,12 +142,12 @@ func TestListServices_FilterFuzzy(t *testing.T) {
 	)
 	// "dwb" is a subsequence of "demo.web" only.
 	resp := mustGet(t, api, "/api/v1/service?target.fuzzy=dwb")
-	if len(resp.Items) != 1 || resp.Items[0].Target != "demo.web" {
+	if len(resp.Items) != 1 || resp.Items[0].Target != targetDemoWeb {
 		t.Fatalf("fuzzy unexpected: %+v", resp.Items)
 	}
 	// Case insensitive.
 	resp = mustGet(t, api, "/api/v1/service?target.fuzzy=DWB")
-	if len(resp.Items) != 1 || resp.Items[0].Target != "demo.web" {
+	if len(resp.Items) != 1 || resp.Items[0].Target != targetDemoWeb {
 		t.Fatalf("fuzzy case-insensitive failed: %+v", resp.Items)
 	}
 }
@@ -313,7 +315,7 @@ func TestListTuples(t *testing.T) {
 		if resp.Items[i].Service != "demo/web" {
 			t.Errorf("items[%d].Service=%q want demo/web", i, resp.Items[i].Service)
 		}
-		if resp.Items[i].RoutingKey != "demo.web" {
+		if resp.Items[i].RoutingKey != targetDemoWeb {
 			t.Errorf("items[%d].RoutingKey=%q want demo.web", i, resp.Items[i].RoutingKey)
 		}
 	}
@@ -374,10 +376,10 @@ func TestSubseqMatch(t *testing.T) {
 		s, p string
 		want bool
 	}{
-		{"demo.web", "dwb", true},
-		{"demo.web", "ow", true},
-		{"demo.web", "wd", false},
-		{"demo.web", "", true},
+		{targetDemoWeb, "dwb", true},
+		{targetDemoWeb, "ow", true},
+		{targetDemoWeb, "wd", false},
+		{targetDemoWeb, "", true},
 		{"", "x", false},
 	}
 	for _, c := range cases {

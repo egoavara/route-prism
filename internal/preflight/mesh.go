@@ -53,7 +53,7 @@ func (m MeshInfo) Summary() string {
 	case MeshUnknown:
 		return "unknown (neither istiod nor cilium-operator found)"
 	default:
-		base := fmt.Sprintf("%s", m.Kind)
+		base := string(m.Kind)
 		if !m.Version.IsZero() {
 			base = fmt.Sprintf("%s %s", m.Kind, m.Version)
 		} else if m.RawImage != "" {
@@ -192,8 +192,8 @@ func readDeploymentImage(ctx context.Context, c client.Client, ns, name string) 
 // last ':' (covers "image@sha256:..." poorly, hence prefix-first).
 func parseVersionFromImage(image string, prefixes []string) Version {
 	for _, p := range prefixes {
-		if idx := strings.Index(image, p); idx >= 0 {
-			return parseVersion(image[idx+len(p):])
+		if _, after, ok := strings.Cut(image, p); ok {
+			return parseVersion(after)
 		}
 	}
 	if idx := strings.LastIndex(image, ":"); idx >= 0 && idx < len(image)-1 {

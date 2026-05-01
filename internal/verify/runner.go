@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"sort"
 	"strings"
 	"time"
@@ -85,9 +86,9 @@ type Options struct {
 
 // NamespaceState is what Inspect reports about the verify namespace.
 type NamespaceState struct {
-	Exists           bool
-	ExistingLabels   map[string]string
-	MissingLabels    map[string]string // labels the mesh requires that aren't present yet
+	Exists         bool
+	ExistingLabels map[string]string
+	MissingLabels  map[string]string // labels the mesh requires that aren't present yet
 }
 
 // NeedsConsent is true when proceeding would modify a pre-existing
@@ -212,11 +213,11 @@ func Run(ctx context.Context, opts Options) Stream {
 //   - Namespace doesn't exist → create with all labels.
 //   - Namespace exists, all required labels present → no-op.
 //   - Namespace exists, missing labels:
-//       policy=abort (default) → return ErrNamespaceConsentRequired.
-//       policy=delete         → cascade delete the namespace, then
-//                               recreate with the required labels.
-//       policy=patch          → patch only the missing labels in place
-//                               (existing labels untouched).
+//     policy=abort (default) → return ErrNamespaceConsentRequired.
+//     policy=delete         → cascade delete the namespace, then
+//     recreate with the required labels.
+//     policy=patch          → patch only the missing labels in place
+//     (existing labels untouched).
 //
 // Returns a short human-friendly summary suitable for a TUI step.
 func reconcileNamespace(
@@ -298,9 +299,7 @@ func patchLabels(ctx context.Context, c client.Client, ns *corev1.Namespace, add
 	if ns.Labels == nil {
 		ns.Labels = map[string]string{}
 	}
-	for k, v := range add {
-		ns.Labels[k] = v
-	}
+	maps.Copy(ns.Labels, add)
 	if err := c.Patch(ctx, ns, patch); err != nil {
 		return fmt.Errorf("patch namespace %q labels: %w", ns.Name, err)
 	}
@@ -342,12 +341,8 @@ func waitNamespaceGone(ctx context.Context, c client.Client, name string, budget
 
 func mergeLabels(a, b map[string]string) map[string]string {
 	out := make(map[string]string, len(a)+len(b))
-	for k, v := range a {
-		out[k] = v
-	}
-	for k, v := range b {
-		out[k] = v
-	}
+	maps.Copy(out, a)
+	maps.Copy(out, b)
 	return out
 }
 

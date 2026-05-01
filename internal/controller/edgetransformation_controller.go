@@ -206,7 +206,7 @@ func (r *EdgeTransformationReconciler) Reconcile(ctx context.Context, req ctrl.R
 }
 
 func (r *EdgeTransformationReconciler) apply(ctx context.Context, obj client.Object) error {
-	return r.Patch(ctx, obj, client.Apply, client.FieldOwner(FieldOwnerET), client.ForceOwnership)
+	return r.Patch(ctx, obj, client.Apply, client.FieldOwner(FieldOwnerET), client.ForceOwnership) //nolint:staticcheck // client.Apply replacement requires server-side apply refactor; tracked separately.
 }
 
 // findCRForTarget returns a ContextRoute attached to the same target Service,
@@ -311,7 +311,7 @@ func (r *EdgeTransformationReconciler) firstReadyEndpoint(ctx context.Context, n
 	return bestIP, bestPort, nil
 }
 
-func (r *EdgeTransformationReconciler) event(et *routeprismv1alpha1.EdgeTransformation, eventtype, reason, fmtStr string, args ...interface{}) {
+func (r *EdgeTransformationReconciler) event(et *routeprismv1alpha1.EdgeTransformation, eventtype, reason, fmtStr string, args ...any) {
 	if r.Recorder == nil {
 		return
 	}
@@ -339,6 +339,7 @@ func (r *EdgeTransformationReconciler) surfaceHTTPRouteRejection(ctx context.Con
 	}
 }
 
+//nolint:unparam // signature kept for symmetry / future extensibility
 func setETCondition(et *routeprismv1alpha1.EdgeTransformation, condType string, status metav1.ConditionStatus, reason, msg string) {
 	cond := metav1.Condition{
 		Type:               condType,

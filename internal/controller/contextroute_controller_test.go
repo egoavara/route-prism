@@ -26,7 +26,7 @@ var _ = Describe("ContextRoute Controller", func() {
 	const ns = "default"
 
 	reconcileN := func(r *ContextRouteReconciler, name string, n int) {
-		for i := 0; i < n; i++ {
+		for range n {
 			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: ns, Name: name}})
 			Expect(err).NotTo(HaveOccurred())
 		}

@@ -76,4 +76,3 @@ func RestConfigFor(explicitPath, contextName string) (*rest.Config, error) {
 	}
 	return rc, nil
 }
-

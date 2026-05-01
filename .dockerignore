@@ -20,3 +20,16 @@
 # Re-include host-compiled binaries used by the Tilt dev-loop images.
 !bin/manager-linux
 !bin/sample-tier-linux
+
+# Re-include web sources consumed by the web-builder stage in Dockerfile.
+# Keep node_modules, vite caches and prebuilt dist directories out of the
+# build context so the in-container build is reproducible.
+!web/**
+web/**/node_modules
+web/**/node_modules/**
+web/**/.vite
+web/**/.vite/**
+web/dist
+web/dist/**
+web/widget/dist
+web/widget/dist/**

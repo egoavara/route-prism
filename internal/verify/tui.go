@@ -18,6 +18,13 @@ import (
 	"github.com/egoavara/route-prism/internal/preflight"
 )
 
+const (
+	keyCtrlC = "ctrl+c"
+	keyDown  = "down"
+	keyEnter = "enter"
+	keyEsc   = "esc"
+)
+
 // ---------- styles ----------
 
 var (
@@ -85,7 +92,6 @@ type Model struct {
 	cancelFunc    context.CancelFunc
 
 	opts Options
-	err  error
 	w, h int
 }
 
@@ -278,17 +284,17 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch m.state {
 	case statePicking:
 		switch msg.String() {
-		case "ctrl+c", "q", "esc":
+		case keyCtrlC, "q", keyEsc:
 			return m, tea.Quit
 		case "up", "k":
 			if m.cursor > 0 {
 				m.cursor--
 			}
-		case "down", "j":
+		case keyDown, "j":
 			if m.cursor < len(m.contexts)-1 {
 				m.cursor++
 			}
-		case "enter":
+		case keyEnter:
 			c := m.contexts[m.cursor]
 			m.chosen = &c
 			m.state = stateInspecting
@@ -297,39 +303,39 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case stateInspecting:
 		switch msg.String() {
-		case "ctrl+c", "q":
+		case keyCtrlC, "q":
 			return m, tea.Quit
 		}
 
 	case stateModePicking:
 		switch msg.String() {
-		case "ctrl+c", "q", "esc":
+		case keyCtrlC, "q", keyEsc:
 			return m, tea.Quit
 		case "up", "k":
 			if m.modeCursor > 0 {
 				m.modeCursor--
 			}
-		case "down", "j":
+		case keyDown, "j":
 			if m.modeCursor < len(m.modes)-1 {
 				m.modeCursor++
 			}
-		case "enter":
+		case keyEnter:
 			return m.advanceFromMode()
 		}
 
 	case stateNSConsent:
 		switch msg.String() {
-		case "ctrl+c", "esc":
+		case keyCtrlC, keyEsc:
 			return m, tea.Quit
 		case "up", "k":
 			if m.consentCursor > 0 {
 				m.consentCursor--
 			}
-		case "down", "j":
+		case keyDown, "j":
 			if m.consentCursor < len(m.consents)-1 {
 				m.consentCursor++
 			}
-		case "enter":
+		case keyEnter:
 			choice := m.consents[m.consentCursor]
 			if choice.abort {
 				return m, tea.Quit
@@ -341,7 +347,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case stateRunning:
 		switch msg.String() {
-		case "ctrl+c", "q":
+		case keyCtrlC, "q":
 			if m.cancelFunc != nil {
 				m.cancelFunc()
 			}
@@ -350,7 +356,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case stateDone:
 		switch msg.String() {
-		case "ctrl+c", "q", "esc", "enter":
+		case keyCtrlC, "q", keyEsc, keyEnter:
 			return m, tea.Quit
 		}
 	}

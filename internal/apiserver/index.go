@@ -255,7 +255,7 @@ func (i *Index) Rebuild(ctx context.Context) error {
 				if info, ok := rrByNsName[owner.Namespace+"/"+alt]; ok {
 					te.Remote = true
 					te.Reachable = info.reachable
-					remoteByAlt[key+":"+alt] = remoteFlag{reachable: info.reachable}
+					remoteByAlt[key+":"+alt] = remoteFlag(info)
 					hasRemoteByTarget[key] = true
 				}
 			}

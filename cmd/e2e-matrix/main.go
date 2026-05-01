@@ -39,12 +39,13 @@ import (
 )
 
 var (
-	flagPlatforms   = flag.String("platforms", "cilium,istio,cilium-istio", "comma-separated mesh platforms to test")
-	flagGroups      = flag.String("groups", "g1,g3,g4,g7,g8", "comma-separated scenario groups (Ginkgo labels)")
-	flagImg         = flag.String("img", "route-prism-e2e:latest", "manager image tag for the matrix")
-	flagSkipBuild   = flag.Bool("skip-build", false, "skip 'make docker-build' (assume image already exists)")
-	flagKeep        = flag.Bool("keep", false, "leave cluster up on failure for inspection")
-	flagParallel    = flag.Int("parallel", 4, "max concurrent cells (0 = all). Each cell uses ~1.5–2 GB RAM and ~2 CPU cores")
+	flagPlatforms = flag.String("platforms", "cilium,istio,cilium-istio", "comma-separated mesh platforms to test")
+	flagGroups    = flag.String("groups", "g1,g3,g4,g7,g8", "comma-separated scenario groups (Ginkgo labels)")
+	flagImg       = flag.String("img", "route-prism-e2e:latest", "manager image tag for the matrix")
+	flagSkipBuild = flag.Bool("skip-build", false, "skip 'make docker-build' (assume image already exists)")
+	flagKeep      = flag.Bool("keep", false, "leave cluster up on failure for inspection")
+	flagParallel  = flag.Int("parallel", 4,
+		"max concurrent cells (0 = all). Each cell uses ~1.5–2 GB RAM and ~2 CPU cores")
 	flagTestTimeout = flag.String("test-timeout", "10m", "go test -timeout value for each cell")
 )
 
@@ -168,10 +169,10 @@ func runPlatform(repo, logsDir, testBin, platform string, groups []string) Platf
 			LogPath:     logPath,
 		}
 	}
-	defer logFile.Close()
+	defer func() { _ = logFile.Close() }()
 
 	header := fmt.Sprintf("=== platform %s · cluster=%s · kubeconfig=%s ===\n", platform, cluster, kubeconfig)
-	fmt.Fprint(logFile, header)
+	_, _ = fmt.Fprint(logFile, header)
 	fmt.Print(header)
 
 	stream := io.MultiWriter(logFile, prefixWriter(os.Stdout, "["+platform+"] "))
@@ -193,7 +194,7 @@ func runPlatform(repo, logsDir, testBin, platform string, groups []string) Platf
 	}()
 
 	step := func(msg string, args ...any) {
-		fmt.Fprintf(stream, "→ "+msg+"\n", args...)
+		_, _ = fmt.Fprintf(stream, "→ "+msg+"\n", args...)
 	}
 
 	cleanup := func() {
@@ -205,7 +206,7 @@ func runPlatform(repo, logsDir, testBin, platform string, groups []string) Platf
 	step("creating kind cluster (--platform %s)", platform)
 	if err := runWith(env, stream, errStream, repo, "./hack/kind-up.sh", "--platform", platform); err != nil {
 		res.SetupReason = "kind-up failed: " + err.Error()
-		fmt.Fprintf(errStream, "FAIL kind-up: %v\n", err)
+		_, _ = fmt.Fprintf(errStream, "FAIL kind-up: %v\n", err)
 		return res
 	}
 
@@ -213,7 +214,7 @@ func runPlatform(repo, logsDir, testBin, platform string, groups []string) Platf
 	if err := runWith(env, stream, errStream, repo, "./bin/kind",
 		"load", "docker-image", *flagImg, "--name", cluster); err != nil {
 		res.SetupReason = "kind load failed"
-		fmt.Fprintf(errStream, "FAIL kind load: %v\n", err)
+		_, _ = fmt.Fprintf(errStream, "FAIL kind load: %v\n", err)
 		if !*flagKeep {
 			cleanup()
 		}
@@ -223,7 +224,7 @@ func runPlatform(repo, logsDir, testBin, platform string, groups []string) Platf
 	step("installing CRDs and deploying controller (inline kustomize)")
 	if err := installCRDsInline(env, stream, errStream, repo); err != nil {
 		res.SetupReason = "CRD install failed"
-		fmt.Fprintf(errStream, "FAIL CRD install: %v\n", err)
+		_, _ = fmt.Fprintf(errStream, "FAIL CRD install: %v\n", err)
 		if !*flagKeep {
 			cleanup()
 		}
@@ -231,7 +232,7 @@ func runPlatform(repo, logsDir, testBin, platform string, groups []string) Platf
 	}
 	if err := deployControllerInline(env, stream, errStream, repo, *flagImg); err != nil {
 		res.SetupReason = "deploy failed"
-		fmt.Fprintf(errStream, "FAIL deploy: %v\n", err)
+		_, _ = fmt.Fprintf(errStream, "FAIL deploy: %v\n", err)
 		if !*flagKeep {
 			cleanup()
 		}
@@ -244,7 +245,7 @@ func runPlatform(repo, logsDir, testBin, platform string, groups []string) Platf
 		"rollout", "status", "deployment/route-prism-controller-manager",
 		"--timeout=3m"); err != nil {
 		res.SetupReason = "controller never became Ready"
-		fmt.Fprintf(errStream, "FAIL controller readiness: %v\n", err)
+		_, _ = fmt.Fprintf(errStream, "FAIL controller readiness: %v\n", err)
 		if !*flagKeep {
 			cleanup()
 		}
@@ -283,7 +284,7 @@ func runPlatform(repo, logsDir, testBin, platform string, groups []string) Platf
 	if !anyFail || !*flagKeep {
 		cleanup()
 	} else {
-		fmt.Fprintf(stream, "→ KEEPING cluster %s for inspection (KUBECONFIG=%s)\n", cluster, kubeconfig)
+		_, _ = fmt.Fprintf(stream, "→ KEEPING cluster %s for inspection (KUBECONFIG=%s)\n", cluster, kubeconfig)
 	}
 	return res
 }
@@ -303,7 +304,7 @@ func installCRDsInline(env []string, stdout, stderr io.Writer, repo string) erro
 		return fmt.Errorf("kustomize build config/crd: %w", err)
 	}
 	if len(out) == 0 {
-		fmt.Fprintln(stdout, "→ no CRDs to install (config/crd is empty)")
+		_, _ = fmt.Fprintln(stdout, "→ no CRDs to install (config/crd is empty)")
 		return nil
 	}
 	apply := exec.Command("kubectl", "apply", "-f", "-")
@@ -420,7 +421,7 @@ func mustBeRepoRoot(dir string) {
 }
 
 func fatal(format string, args ...any) {
-	fmt.Fprintf(os.Stderr, "ERROR: "+format+"\n", args...)
+	_, _ = fmt.Fprintf(os.Stderr, "ERROR: "+format+"\n", args...)
 	os.Exit(2)
 }
 

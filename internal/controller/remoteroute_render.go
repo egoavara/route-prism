@@ -9,6 +9,7 @@ import (
 	"bytes"
 	_ "embed"
 	"fmt"
+	"maps"
 	"net/url"
 	"strconv"
 	"strings"
@@ -21,6 +22,11 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 
 	routeprismv1alpha1 "github.com/egoavara/route-prism/api/v1alpha1"
+)
+
+const (
+	schemeHTTP  = "http"
+	schemeHTTPS = "https"
 )
 
 //go:embed templates/envoy.remote.yaml.tmpl
@@ -75,7 +81,7 @@ func resolveUpstreams(rr *routeprismv1alpha1.RemoteRoute) ([]envoyGroup, bool, s
 		if err != nil {
 			return fmt.Errorf("parse url %q: %w", raw, err)
 		}
-		if u.Scheme != "http" && u.Scheme != "https" {
+		if u.Scheme != schemeHTTP && u.Scheme != schemeHTTPS {
 			return fmt.Errorf("unsupported scheme %q on %q", u.Scheme, raw)
 		}
 		if scheme == "" {
@@ -94,7 +100,7 @@ func resolveUpstreams(rr *routeprismv1alpha1.RemoteRoute) ([]envoyGroup, bool, s
 		ep := envoyEndpoint{Host: host, Port: port}
 		// When the host is a DNS name we set hostname: so Envoy can use
 		// it for SNI on TLS upstreams.
-		if u.Scheme == "https" && !looksLikeIP(host) {
+		if u.Scheme == schemeHTTPS && !looksLikeIP(host) {
 			ep.Hostname = host
 		}
 		g.Endpoints = append(g.Endpoints, ep)
@@ -140,7 +146,7 @@ func resolveUpstreams(rr *routeprismv1alpha1.RemoteRoute) ([]envoyGroup, bool, s
 	if mode == routeprismv1alpha1.RemoteLBRandom {
 		lbPolicy = "RANDOM"
 	}
-	return groups, scheme == "https", lbPolicy, nil
+	return groups, scheme == schemeHTTPS, lbPolicy, nil
 }
 
 func portForURL(u *url.URL) (int32, error) {
@@ -152,9 +158,9 @@ func portForURL(u *url.URL) (int32, error) {
 		return int32(n), nil
 	}
 	switch u.Scheme {
-	case "http":
+	case schemeHTTP:
 		return 80, nil
-	case "https":
+	case schemeHTTPS:
 		return 443, nil
 	}
 	return 0, fmt.Errorf("no default port for scheme %q", u.Scheme)
@@ -235,9 +241,7 @@ func rrIdentityLabels(rr *routeprismv1alpha1.RemoteRoute) map[string]string {
 // the Service is discoverable by the operator).
 func rrServiceLabels(rr *routeprismv1alpha1.RemoteRoute, variantLabels map[string]string) map[string]string {
 	out := rrIdentityLabels(rr)
-	for k, v := range variantLabels {
-		out[k] = v
-	}
+	maps.Copy(out, variantLabels)
 	// metadata.name doubles as the variant key (cookie/baggage value);
 	// stamp it as a Service label too so name-based listings work.
 	out["app.kubernetes.io/name"] = rr.Name
@@ -266,7 +270,7 @@ func renderRemoteConfigMap(rr *routeprismv1alpha1.RemoteRoute, conf string) *cor
 // matches the RemoteRoute name. That's what makes "RR name = cookie value"
 // work end-to-end.
 func renderRemoteService(rr *routeprismv1alpha1.RemoteRoute, variantLabels map[string]string) *corev1.Service {
-	httpProto := "http"
+	httpProto := schemeHTTP
 	return &corev1.Service{
 		TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Service"},
 		ObjectMeta: metav1.ObjectMeta{

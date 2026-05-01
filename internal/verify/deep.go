@@ -550,15 +550,15 @@ func runTrafficProbes(ctx context.Context, c client.Client, cs kubernetes.Interf
 	}
 	parseTrafficLogs(logs, cases)
 
-	if finalPhase == corev1.PodFailed {
-		// Logs already parsed; surface failure flag implicitly via Cases.
-	}
+	// finalPhase may be corev1.PodFailed; logs already parsed and per-case
+	// status is surfaced through Cases, so no extra handling is required.
+	_ = finalPhase
 	return cases, nil
 }
 
 func buildCurlPod(ns string, cases []TrafficCase) *corev1.Pod {
 	// One curl per case; each prints "CASE-<i>:<status>:<body>".
-	var lines []string
+	lines := make([]string, 0, len(cases))
 	for i, tc := range cases {
 		header := ""
 		if tc.Header != "" {
@@ -645,7 +645,7 @@ func podLogs(ctx context.Context, cs kubernetes.Interface, ns, name string) (str
 	if err != nil {
 		return "", err
 	}
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 	b, err := io.ReadAll(rc)
 	if err != nil {
 		return "", err

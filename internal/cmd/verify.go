@@ -113,37 +113,37 @@ namespace and removed on completion (override with --keep-namespace).`,
 
 func printReport(cmd *cobra.Command, report preflight.ProbeReport, cases []verify.TrafficCase, err error) error {
 	out := cmd.OutOrStdout()
-	fmt.Fprintln(out)
-	fmt.Fprintf(out, "Mesh: %s\n", report.Mesh.Summary())
-	fmt.Fprintf(out, "Outcome: %s\n", report.Outcome)
+	_, _ = fmt.Fprintln(out)
+	_, _ = fmt.Fprintf(out, "Mesh: %s\n", report.Mesh.Summary())
+	_, _ = fmt.Fprintf(out, "Outcome: %s\n", report.Outcome)
 	if report.ControllerName != "" {
-		fmt.Fprintf(out, "Controller: %s\n", report.ControllerName)
+		_, _ = fmt.Fprintf(out, "Controller: %s\n", report.ControllerName)
 	}
 	if report.Reason != "" {
-		fmt.Fprintf(out, "Reason: %s\n", report.Reason)
+		_, _ = fmt.Fprintf(out, "Reason: %s\n", report.Reason)
 	}
 	if report.Message != "" {
-		fmt.Fprintf(out, "Message: %s\n", report.Message)
+		_, _ = fmt.Fprintf(out, "Message: %s\n", report.Message)
 	}
 	if len(cases) > 0 {
-		fmt.Fprintln(out, "\nTraffic cases:")
+		_, _ = fmt.Fprintln(out, "\nTraffic cases:")
 		for _, tc := range cases {
 			marker := "PASS"
 			if !tc.OK {
 				marker = "FAIL"
 			}
-			fmt.Fprintf(out, "  [%s] %s — expected=%s got=%s", marker, tc.Name, tc.Expected, tc.GotVariant)
+			_, _ = fmt.Fprintf(out, "  [%s] %s — expected=%s got=%s", marker, tc.Name, tc.Expected, tc.GotVariant)
 			if tc.Err != nil {
-				fmt.Fprintf(out, "  err=%q", tc.Err.Error())
+				_, _ = fmt.Fprintf(out, "  err=%q", tc.Err.Error())
 			}
-			fmt.Fprintln(out)
+			_, _ = fmt.Fprintln(out)
 		}
 	}
 	recs := verify.Recommend(report)
 	if len(recs) > 0 {
-		fmt.Fprintln(out, "\nRecommendations:")
+		_, _ = fmt.Fprintln(out, "\nRecommendations:")
 		for _, r := range recs {
-			fmt.Fprintf(out, "  • %s\n", r)
+			_, _ = fmt.Fprintf(out, "  • %s\n", r)
 		}
 	}
 	if err != nil {

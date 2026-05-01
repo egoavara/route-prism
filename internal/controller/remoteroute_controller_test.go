@@ -33,7 +33,7 @@ var _ = Describe("RemoteRoute Controller", func() {
 				},
 			})
 			Expect(err).NotTo(HaveOccurred())
-			Expect(res.Requeue).To(BeFalse())
+			Expect(res.RequeueAfter).To(BeZero())
 		})
 	})
 })

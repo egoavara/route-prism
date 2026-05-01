@@ -8,6 +8,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 
 	corev1 "k8s.io/api/core/v1"
@@ -80,6 +81,7 @@ type ContextRouteReconciler struct {
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch;update
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch;create;update;patch;delete
 
+//nolint:gocyclo // Reconcile naturally branches across resource phases.
 func (r *ContextRouteReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx).WithValues("contextroute", req.NamespacedName)
 
@@ -244,7 +246,7 @@ func (r *ContextRouteReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		}
 	} else {
 		hr := renderCRHTTPRoute(&cr, &target, variants, true)
-		if err := r.Patch(ctx, hr, client.Apply, client.FieldOwner(FieldOwnerCR), client.ForceOwnership); err != nil {
+		if err := r.Patch(ctx, hr, client.Apply, client.FieldOwner(FieldOwnerCR), client.ForceOwnership); err != nil { //nolint:staticcheck // client.Apply replacement requires server-side apply refactor; tracked separately.
 			log.Error(err, "apply HTTPRoute")
 			r.event(&cr, corev1.EventTypeWarning, EventReasonHTTPRouteApplyFailed,
 				"failed to apply HTTPRoute on target %q: %v", target.Name, err)
@@ -364,7 +366,7 @@ func (r *ContextRouteReconciler) surfaceHTTPRouteRejection(ctx context.Context, 
 	}
 }
 
-func (r *ContextRouteReconciler) event(cr *routeprismv1alpha1.ContextRoute, eventtype, reason, fmtStr string, args ...interface{}) {
+func (r *ContextRouteReconciler) event(cr *routeprismv1alpha1.ContextRoute, eventtype, reason, fmtStr string, args ...any) {
 	if r.Recorder == nil {
 		return
 	}
@@ -431,11 +433,8 @@ func (r *ContextRouteReconciler) SetupWithManager(mgr ctrl.Manager) error {
 				continue
 			}
 			// Previously contributed as variant — also requeue (cleanup case).
-			for _, v := range cr.Status.VariantServices {
-				if v == svc.Name {
-					out = append(out, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: cr.Namespace, Name: cr.Name}})
-					break
-				}
+			if slices.Contains(cr.Status.VariantServices, svc.Name) {
+				out = append(out, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: cr.Namespace, Name: cr.Name}})
 			}
 		}
 		return out

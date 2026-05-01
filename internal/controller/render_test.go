@@ -17,6 +17,8 @@ import (
 	routeprismv1alpha1 "github.com/egoavara/route-prism/api/v1alpha1"
 )
 
+const targetWeb = "web"
+
 func TestBaggageMatchRegex(t *testing.T) {
 	const routingKey = "default.web"
 	type tc struct {
@@ -122,7 +124,7 @@ func TestRenderNginxConf_WidgetEnabled(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Namespace: "demo"},
 		Spec: routeprismv1alpha1.EdgeTransformationSpec{
 			SourceCookie: "x-route-prism",
-			Target:       routeprismv1alpha1.TargetReference{Service: routeprismv1alpha1.ServiceReference{Name: "web"}},
+			Target:       routeprismv1alpha1.TargetReference{Service: routeprismv1alpha1.ServiceReference{Name: targetWeb}},
 			WidgetInjection: &routeprismv1alpha1.WidgetInjectionSpec{
 				Enable: true,
 				HTTP:   routeprismv1alpha1.WidgetHTTPSpec{PathPrefix: ".rp"},
@@ -209,7 +211,7 @@ func TestRenderCRHTTPRoute_Topology(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "demo-route", Namespace: "demo"},
 		Spec: routeprismv1alpha1.ContextRouteSpec{
 			Target: routeprismv1alpha1.TargetReference{
-				Service: routeprismv1alpha1.ServiceReference{Name: "web"},
+				Service: routeprismv1alpha1.ServiceReference{Name: targetWeb},
 			},
 			Variants: routeprismv1alpha1.VariantSelector{
 				Selector: metav1.LabelSelector{MatchLabels: map[string]string{"app": "web"}},
@@ -217,7 +219,7 @@ func TestRenderCRHTTPRoute_Topology(t *testing.T) {
 		},
 	}
 	target := corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "demo"},
+		ObjectMeta: metav1.ObjectMeta{Name: targetWeb, Namespace: "demo"},
 		Spec:       corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: 80}}},
 	}
 	variants := []corev1.Service{
@@ -237,7 +239,7 @@ func TestRenderCRHTTPRoute_Topology(t *testing.T) {
 		t.Fatalf("expected 1 parentRef, got %d", len(hr.Spec.ParentRefs))
 	}
 	pr := hr.Spec.ParentRefs[0]
-	if pr.Group == nil || *pr.Group != "" || pr.Kind == nil || *pr.Kind != "Service" || string(pr.Name) != "web" {
+	if pr.Group == nil || *pr.Group != "" || pr.Kind == nil || *pr.Kind != "Service" || string(pr.Name) != targetWeb {
 		t.Errorf("parentRef should be Service web (core), got %+v", pr)
 	}
 
@@ -266,8 +268,8 @@ func TestRenderCRHTTPRoute_Topology(t *testing.T) {
 	if len(last.Matches) != 0 {
 		t.Errorf("catch-all rule must have no matches, got %+v", last.Matches)
 	}
-	if string(last.BackendRefs[0].Name) != "web" {
-		t.Errorf("catch-all backend should be target %q, got %q", "web", last.BackendRefs[0].Name)
+	if string(last.BackendRefs[0].Name) != targetWeb {
+		t.Errorf("catch-all backend should be target %q, got %q", targetWeb, last.BackendRefs[0].Name)
 	}
 }
 
@@ -276,14 +278,14 @@ func TestRenderCRHTTPRoute_NoVariants(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "x", Namespace: "demo"},
 	}
 	target := corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "demo"},
+		ObjectMeta: metav1.ObjectMeta{Name: targetWeb, Namespace: "demo"},
 		Spec:       corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: 80}}},
 	}
 	hr := renderCRHTTPRoute(cr, &target, nil, true)
 	if len(hr.Spec.Rules) != 1 {
 		t.Fatalf("expected only catch-all rule, got %d rules", len(hr.Spec.Rules))
 	}
-	if string(hr.Spec.Rules[0].BackendRefs[0].Name) != "web" {
+	if string(hr.Spec.Rules[0].BackendRefs[0].Name) != targetWeb {
 		t.Errorf("catch-all should backend the target")
 	}
 }
@@ -293,7 +295,7 @@ func TestRenderETHTTPRoute_SingleCatchAll(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "demo-edge", Namespace: "demo"},
 	}
 	target := corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "demo"},
+		ObjectMeta: metav1.ObjectMeta{Name: targetWeb, Namespace: "demo"},
 		Spec:       corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: 80}}},
 	}
 	hr := renderETHTTPRoute(et, &target)

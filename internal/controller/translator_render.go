@@ -12,6 +12,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"regexp"
 	"sort"
 	"strings"
@@ -332,9 +333,7 @@ func renderTranslatorDeployment(et *routeprismv1alpha1.EdgeTransformation, conf 
 	labels := translatorLabels(et)
 	replicas := int32(1)
 	podLabels := make(map[string]string, len(labels))
-	for k, v := range labels {
-		podLabels[k] = v
-	}
+	maps.Copy(podLabels, labels)
 	return &appsv1.Deployment{
 		TypeMeta: metav1.TypeMeta{APIVersion: "apps/v1", Kind: "Deployment"},
 		ObjectMeta: metav1.ObjectMeta{
