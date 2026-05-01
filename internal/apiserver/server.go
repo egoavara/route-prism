@@ -197,6 +197,22 @@ func (s *Server) registerEventHandlers(ctx context.Context, deb *debouncer, log 
 	}); err != nil {
 		return err
 	}
+
+	// RemoteRoute changes (status.conditions[UpstreamReachable] flips
+	// every time the host PC comes online or drops) must rebuild the
+	// snapshot so the widget's "remote/reachable" affordance reflects
+	// reality without a manual refresh.
+	rrInf, err := s.cache.GetInformer(ctx, &routeprismv1alpha1.RemoteRoute{})
+	if err != nil {
+		return err
+	}
+	if _, err := rrInf.AddEventHandler(toolscache.ResourceEventHandlerFuncs{
+		AddFunc:    func(_ any) { deb.trigger() },
+		UpdateFunc: func(_, _ any) { deb.trigger() },
+		DeleteFunc: func(_ any) { deb.trigger() },
+	}); err != nil {
+		return err
+	}
 	log.Info("Registered informer event handlers for routing index")
 	return nil
 }

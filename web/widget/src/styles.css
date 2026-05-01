@@ -54,10 +54,17 @@ input {
   left: var(--rp-margin-left, 16px);
 }
 
+/* Sidebar mode pins the host wrapper to one viewport edge and lets the
+   tab grow along that edge. Vertical edges (left/right) span the
+   height; horizontal edges (top/bottom) span the width — the inner
+   .rp-tab styles flip writing-mode accordingly. */
 .rp-mode-sidebar {
+  display: flex;
+}
+.rp-mode-sidebar.rp-anchor-right,
+.rp-mode-sidebar.rp-anchor-left {
   top: 0;
   bottom: 0;
-  display: flex;
   align-items: center;
 }
 .rp-mode-sidebar.rp-anchor-right {
@@ -65,6 +72,18 @@ input {
 }
 .rp-mode-sidebar.rp-anchor-left {
   left: 0;
+}
+.rp-mode-sidebar.rp-anchor-top,
+.rp-mode-sidebar.rp-anchor-bottom {
+  left: 0;
+  right: 0;
+  justify-content: center;
+}
+.rp-mode-sidebar.rp-anchor-top {
+  top: 0;
+}
+.rp-mode-sidebar.rp-anchor-bottom {
+  bottom: 0;
 }
 
 /* Floating toggle button. */
@@ -86,6 +105,43 @@ input {
 .rp-button:hover {
   transform: translateY(-1px);
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.24);
+}
+
+/* Cycling label — kept on a single line, fades on rotation, capped so
+   long routingKey=alternative pairs don't push the button across the
+   viewport. The host page can override --rp-label-max-width to widen
+   it (e.g. for very long namespace.service combinations). The span is
+   re-mounted on each rotation (key={label} in App.tsx) so the
+   rp-label-in keyframe replays as a fade-in + slide-up. Combined with
+   the 5s rotation interval, the user reads each entry comfortably and
+   the change registers as motion rather than a snap. */
+.rp-button-label {
+  display: inline-block;
+  max-width: var(--rp-label-max-width, 28ch);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 10px;
+  animation: rp-label-in 420ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+@keyframes rp-label-in {
+  0% {
+    opacity: 0;
+    transform: translateY(4px);
+    filter: blur(1px);
+  }
+  60% {
+    opacity: 1;
+    filter: blur(0);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0);
+  }
 }
 
 .rp-button .rp-dot {
@@ -156,17 +212,111 @@ input {
   }
 }
 
-/* Sidebar tab. */
+/* Alarm state — at least one currently-selected variant is a
+   RemoteRoute whose host PC is unreachable. Highest priority among
+   button states because this is actively breaking traffic right now.
+   Pulses the entire button red (background + glow) on a 1.4s breath
+   so it's spottable in peripheral vision. */
+.rp-alarm.rp-button {
+  background: #dc2626;
+  color: #ffffff;
+  border-color: #b91c1c;
+  animation: rp-pulse-alarm 1.4s ease-in-out infinite;
+}
+
+.rp-alarm .rp-dot {
+  background: #fff;
+  box-shadow: 0 0 0 1.5px rgba(255, 255, 255, 0.65);
+}
+
+@keyframes rp-pulse-alarm {
+  0%,
+  100% {
+    background: #dc2626;
+    box-shadow:
+      0 4px 14px rgba(220, 38, 38, 0.35),
+      0 0 0 0 rgba(220, 38, 38, 0.55),
+      0 0 12px rgba(220, 38, 38, 0.45);
+  }
+  50% {
+    background: #ef4444;
+    box-shadow:
+      0 4px 18px rgba(220, 38, 38, 0.55),
+      0 0 0 6px rgba(220, 38, 38, 0),
+      0 0 28px rgba(239, 68, 68, 0.85);
+  }
+}
+
+/* Sidebar tab. The single child is the cycling label (rp-tab-label) —
+   the rotating routing summary IS the tab's content (no brand text).
+   Writing mode and rounded corners flip per anchor: vertical-rl for
+   left/right edges, plain horizontal for top/bottom. */
 .rp-tab {
-  writing-mode: vertical-rl;
-  text-orientation: mixed;
-  padding: 0.85rem 0.35rem;
   background: #1f1f1f;
   color: #f5f5f5;
-  border-radius: 8px 0 0 8px;
   font-size: 9px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
+}
+
+.rp-mode-sidebar.rp-anchor-right .rp-tab,
+.rp-mode-sidebar.rp-anchor-left .rp-tab {
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  padding: 0.85rem 0.35rem;
+}
+.rp-mode-sidebar.rp-anchor-right .rp-tab {
+  border-radius: 8px 0 0 8px;
+}
+.rp-mode-sidebar.rp-anchor-left .rp-tab {
+  border-radius: 0 8px 8px 0;
+}
+
+.rp-mode-sidebar.rp-anchor-top .rp-tab,
+.rp-mode-sidebar.rp-anchor-bottom .rp-tab {
+  padding: 0.35rem 0.85rem;
+}
+.rp-mode-sidebar.rp-anchor-top .rp-tab {
+  border-radius: 0 0 8px 8px;
+}
+.rp-mode-sidebar.rp-anchor-bottom .rp-tab {
+  border-radius: 8px 8px 0 0;
+}
+
+/* Cycling label inside the sidebar tab. Animation matches the floating
+   button's rp-label-in but the slide axis swaps to the writing-mode
+   inline direction so the motion still reads as "incoming text". */
+.rp-tab-label {
+  max-width: var(--rp-label-max-width, 28ch);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  text-transform: none;
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  animation: rp-tab-label-in 420ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Direction-agnostic fade — the sidebar tab can be rotated 90° (left/
+   right anchors) or laid out horizontally (top/bottom anchors), so the
+   transition uses opacity + blur + a tiny scale instead of a
+   directional translate. Reads as "incoming text" in any orientation. */
+@keyframes rp-tab-label-in {
+  0% {
+    opacity: 0;
+    transform: scale(0.96);
+    filter: blur(1px);
+  }
+  60% {
+    opacity: 1;
+    filter: blur(0);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+    filter: blur(0);
+  }
 }
 
 .rp-tab.rp-active {
@@ -175,6 +325,24 @@ input {
 
 .rp-tab.rp-needs-reload {
   box-shadow: -4px 0 12px rgba(246, 197, 68, 0.6);
+}
+
+.rp-tab.rp-alarm {
+  background: #dc2626;
+  color: #fff;
+  animation: rp-pulse-alarm-tab 1.4s ease-in-out infinite;
+}
+
+@keyframes rp-pulse-alarm-tab {
+  0%,
+  100% {
+    background: #dc2626;
+    box-shadow: -4px 0 12px rgba(220, 38, 38, 0.55);
+  }
+  50% {
+    background: #ef4444;
+    box-shadow: -6px 0 24px rgba(239, 68, 68, 0.9);
+  }
 }
 
 /* Panel — common to both modes when expanded. */
@@ -218,9 +386,15 @@ input {
   top: 50%;
   transform: translateY(-50%);
 }
-
-.rp-mode-sidebar.rp-anchor-left .rp-tab {
-  border-radius: 0 8px 8px 0;
+.rp-mode-sidebar.rp-anchor-top .rp-panel {
+  top: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+}
+.rp-mode-sidebar.rp-anchor-bottom .rp-panel {
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
 }
 
 .rp-header {
@@ -325,6 +499,53 @@ input {
 .rp-list li.rp-alt.rp-current.rp-cursor,
 .rp-list li.rp-alt.rp-current:hover {
   background: rgba(56, 142, 233, 0.26);
+}
+
+/* Remote (RemoteRoute-backed) alternative — small badge to the right of
+   the name plus an indicator dot. Color codes the reachability state:
+     online  : green   — host PC responds to active health checks
+     offline : red     — host PC unreachable; selecting will return 5xx
+     unknown : grey    — controller hasn't reported status yet */
+.rp-remote-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid;
+  flex-shrink: 0;
+}
+.rp-remote-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: currentColor;
+}
+.rp-list li.rp-alt.rp-remote-online .rp-remote-badge {
+  color: #1f8a3a;
+  background: rgba(31, 138, 58, 0.10);
+  border-color: rgba(31, 138, 58, 0.35);
+}
+.rp-list li.rp-alt.rp-remote-offline .rp-remote-badge {
+  color: #c83024;
+  background: rgba(200, 48, 36, 0.12);
+  border-color: rgba(200, 48, 36, 0.45);
+}
+.rp-list li.rp-alt.rp-remote-unknown .rp-remote-badge {
+  color: #6b6b6b;
+  background: rgba(0, 0, 0, 0.04);
+  border-color: rgba(0, 0, 0, 0.18);
+}
+/* Offline rows: tint the alt name red so the user sees "this will not
+   work right now" before clicking. The row stays clickable on purpose
+   — the user might still want to flip the cookie in advance and wait
+   for the PC to come back. */
+.rp-list li.rp-alt.rp-remote-offline .rp-alt-name {
+  color: #b73026;
 }
 
 .rp-list mark {

@@ -10,7 +10,7 @@ import { Input } from '@/components/ui/input'
 // the surrounding Shell — this component renders body only.
 
 type FloatAnchor = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right'
-type SidebarAnchor = 'left' | 'right'
+type SidebarAnchor = 'left' | 'right' | 'top' | 'bottom'
 
 interface FormState {
   target: string
@@ -140,9 +140,9 @@ export default function WidgetPreview({ onBack }: WidgetPreviewProps = {}) {
               </select>
             </Field>
           ) : (
-            <Field label="anchor (side)">
-              <div className="flex gap-3 text-sm">
-                {(['left', 'right'] as const).map((s) => (
+            <Field label="anchor (edge)">
+              <div className="flex flex-wrap gap-3 text-sm">
+                {(['left', 'right', 'top', 'bottom'] as const).map((s) => (
                   <label key={s} className="flex items-center gap-1">
                     <input
                       type="radio"

@@ -220,6 +220,13 @@ func registerControllers(mgr ctrl.Manager, cfg *config.Config) error {
 	}).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("setup EdgeTransformation controller: %w", err)
 	}
+	if err := (&controller.RemoteRouteReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorderFor("remoteroute-controller"),
+	}).SetupWithManager(mgr); err != nil {
+		return fmt.Errorf("setup RemoteRoute controller: %w", err)
+	}
 	// +kubebuilder:scaffold:builder
 	return nil
 }

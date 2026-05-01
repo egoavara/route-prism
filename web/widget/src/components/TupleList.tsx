@@ -45,9 +45,27 @@ export function TupleList({ rows, cursor, entries, onSelect, onHover }: Props) {
     }
     const isCursor = idx === cursor
     const isCurrent = entries.get(row.entry.routingKey) === row.entry.alternative
-    const cls = ['rp-alt', isCursor && 'rp-cursor', isCurrent && 'rp-current']
+    // Remote tuples (RemoteRoute-backed) carry a tristate `reachable`:
+    //   true      → 'rp-remote-online'  green dot
+    //   false     → 'rp-remote-offline' red dot, struck-through label
+    //   undefined → 'rp-remote-unknown' grey dot
+    const remoteState = row.entry.remote
+      ? row.entry.reachable === true
+        ? 'rp-remote-online'
+        : row.entry.reachable === false
+          ? 'rp-remote-offline'
+          : 'rp-remote-unknown'
+      : ''
+    const cls = ['rp-alt', isCursor && 'rp-cursor', isCurrent && 'rp-current', remoteState]
       .filter(Boolean)
       .join(' ')
+    const titleParts: string[] = []
+    if (row.entry.remote) {
+      titleParts.push('remote (RemoteRoute)')
+      if (row.entry.reachable === false) titleParts.push('host PC offline — selecting will return 5xx')
+      else if (row.entry.reachable === true) titleParts.push('host PC reachable')
+      else titleParts.push('reachability unknown')
+    }
     // tuple = "<service>:<alternative>"; matches index into the tuple, so
     // the alternative portion starts right after the colon.
     const altOffset = row.entry.tuple.indexOf(':') + 1
@@ -55,6 +73,7 @@ export function TupleList({ rows, cursor, entries, onSelect, onHover }: Props) {
       <li
         key={row.entry.tuple}
         class={cls}
+        title={titleParts.join(' — ') || undefined}
         onMouseEnter={() => onHover(idx)}
         onClick={() => onSelect(row.entry)}
       >
@@ -62,6 +81,12 @@ export function TupleList({ rows, cursor, entries, onSelect, onHover }: Props) {
         <span class="rp-alt-name">
           {renderHighlighted(row.entry.alternative, row.matches, altOffset)}
         </span>
+        {row.entry.remote && (
+          <span class="rp-remote-badge" aria-label="remote variant">
+            <span class="rp-remote-dot" aria-hidden="true" />
+            {row.entry.reachable === false ? 'offline' : 'remote'}
+          </span>
+        )}
       </li>,
     )
   })

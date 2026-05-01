@@ -2,4 +2,5 @@
 resources:
 - route-prism_v1alpha1_contextroute.yaml
 - route-prism_v1alpha1_edgetransformation.yaml
+- route-prism_v1alpha1_remoteroute.yaml
 # +kubebuilder:scaffold:manifestskustomizesamples

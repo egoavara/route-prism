@@ -87,6 +87,21 @@ type ServiceItem struct {
 	// /service list so callers can flag targets that have a translator
 	// without a second round-trip. Empty means no EdgeTransformation.
 	Translator string `json:"translator,omitempty"`
+	// HasRemote is true on /service responses when at least one
+	// alternative on this target is backed by a RemoteRoute. Lets the
+	// dashboard render a "remote" badge on the target row without
+	// fanning out to /alternative per row.
+	HasRemote bool `json:"hasRemote,omitempty"`
+	// Self is true on /alternative responses for the synthetic row
+	// that represents the unmarked / default path (Target == "."). An
+	// explicit discriminator clients should prefer over comparing the
+	// sentinel string.
+	Self bool `json:"self,omitempty"`
+	// Remote and Reachable are populated only on /alternative responses
+	// and only on rows whose alternative is backed by a RemoteRoute.
+	// Reachable is tristate (nil = status not yet reported).
+	Remote    bool  `json:"remote,omitempty"`
+	Reachable *bool `json:"reachable,omitempty"`
 }
 
 // ListResponse is the wire shape for paginated list endpoints.
@@ -171,7 +186,7 @@ func (a *API) handleListAlternatives(w http.ResponseWriter, r *http.Request) {
 
 	matched := f.apply(entry.list, entry.lower)
 	page, next := paginate(matched, cursor, limit)
-	resp := toAlternativeListResponse(page, next)
+	resp := toAlternativeListResponse(snap, target, page, next)
 	if meta, ok := snap.metaByTarget[target]; ok {
 		resp.RoutingKey = meta.routingKey
 		resp.SourceCookie = meta.sourceCookie
@@ -299,8 +314,8 @@ func paginate(sorted []string, cursor string, limit int) ([]string, string) {
 }
 
 // toServiceListResponse decorates each entry with its translator cookie
-// (if any) so the dashboard can flag ET-backed targets at a glance
-// without a per-row /alternative call.
+// (if any) and a hasRemote flag so the dashboard can surface ET- and
+// RR-backed targets at a glance without a per-row /alternative call.
 func toServiceListResponse(snap *snapshot, page []string, nextCursor string) ListResponse {
 	items := make([]ServiceItem, len(page))
 	for i, t := range page {
@@ -308,18 +323,29 @@ func toServiceListResponse(snap *snapshot, page []string, nextCursor string) Lis
 		if meta, ok := snap.metaByTarget[t]; ok {
 			item.Translator = meta.sourceCookie
 		}
+		if snap.hasRemoteByTarget[t] {
+			item.HasRemote = true
+		}
 		items[i] = item
 	}
 	return ListResponse{Items: items, NextCursor: nextCursor}
 }
 
-// toAlternativeListResponse renders raw alternative names without
-// per-item metadata — alternatives don't carry routing context of their
-// own; the surrounding response carries the routingKey/sourceCookie.
-func toAlternativeListResponse(page []string, nextCursor string) ListResponse {
+// toAlternativeListResponse renders alternative names plus per-item
+// remote/reachable flags when the alternative is backed by a
+// RemoteRoute. Routing context (routingKey/sourceCookie) lives on the
+// outer response.
+func toAlternativeListResponse(snap *snapshot, target string, page []string, nextCursor string) ListResponse {
 	items := make([]ServiceItem, len(page))
 	for i, t := range page {
-		items[i] = ServiceItem{Target: t}
+		item := ServiceItem{Target: t}
+		if t == SelfAlternative {
+			item.Self = true
+		} else if rf, ok := snap.remoteByAlt[target+":"+t]; ok {
+			item.Remote = true
+			item.Reachable = rf.reachable
+		}
+		items[i] = item
 	}
 	return ListResponse{Items: items, NextCursor: nextCursor}
 }

@@ -37,6 +37,17 @@ type snapshot struct {
 	targetsLower []string            // parallel slice, len(targets), lowercase
 	altByTarget  map[string]altEntry // routingKey → alternatives
 	metaByTarget map[string]targetMeta
+	// remoteByAlt is a sidecar lookup keyed by "<routingKey>:<alt>". When
+	// the alternative is backed by a RemoteRoute, the entry carries the
+	// proxy reachability (mirrored from RR's UpstreamReachable condition).
+	// Used by /service, /alternative, and /tuple responses to flag remote
+	// variants without re-listing RemoteRoute on every request.
+	remoteByAlt map[string]remoteFlag
+	// hasRemoteByTarget is true when at least one alternative on that
+	// routingKey is backed by a RemoteRoute. Surfaced on /service so
+	// the dashboard can flag targets that have a remote variant without
+	// fanning out to /alternative per row.
+	hasRemoteByTarget map[string]bool
 	// tuples is the flattened (target × alternative) pair list, one entry
 	// per (routing-target, alternative). Sorted by Tuple ascending. Used
 	// by /api/v1/tuple so the widget can search across both axes in a
@@ -46,14 +57,26 @@ type snapshot struct {
 	tuplesLower []string
 }
 
+// remoteFlag is the sidecar value for remoteByAlt. Reachable is tristate:
+// true (healthy), false (host PC offline), nil (status not yet reported).
+type remoteFlag struct {
+	reachable *bool
+}
+
 // TupleEntry is one (target × alternative) pair as exposed on the wire by
 // /api/v1/tuple. The Tuple field is the user-visible search/display key.
 type TupleEntry struct {
 	// Service is "<namespace>/<service-name>" of the target Service.
 	Service string `json:"service"`
 	// Alternative is the variant Service name, or "." (SelfAlternative)
-	// to mean "no override / route to target itself".
+	// to mean "no override / route to target itself". Clients should
+	// prefer the Self flag over a string compare against "."; the
+	// sentinel value is an internal convention and may change.
 	Alternative string `json:"alternative"`
+	// Self is true when this row represents the unmarked / default path
+	// (the target Service itself). Independent discriminator so callers
+	// don't depend on the "." sentinel.
+	Self bool `json:"self,omitempty"`
 	// Tuple is "<service>:<alternative>" — both human-display and
 	// fuzzy-search input.
 	Tuple string `json:"tuple"`
@@ -64,6 +87,17 @@ type TupleEntry struct {
 	// lifts into Baggage. Empty when no EdgeTransformation is attached
 	// (the tuple is still routable manually via the Baggage header).
 	SourceCookie string `json:"sourceCookie,omitempty"`
+	// Remote is true when this alternative is backed by a RemoteRoute —
+	// traffic to it leaves the cluster for a developer's PC. Lets the
+	// widget render the entry with an explicit "remote" affordance and
+	// gate it on Reachable.
+	Remote bool `json:"remote,omitempty"`
+	// Reachable, when non-nil, mirrors the RemoteRoute's
+	// UpstreamReachable condition. nil means "unknown" (status not yet
+	// reported); false means the developer's PC is unreachable and
+	// selecting this variant will return 5xx; true means traffic flows.
+	// Always nil for non-Remote tuples.
+	Reachable *bool `json:"reachable,omitempty"`
 }
 
 type altEntry struct {
@@ -83,8 +117,10 @@ type targetMeta struct {
 
 // emptySnapshot is the zero-value served before the first rebuild.
 var emptySnapshot = &snapshot{
-	altByTarget:  map[string]altEntry{},
-	metaByTarget: map[string]targetMeta{},
+	altByTarget:       map[string]altEntry{},
+	metaByTarget:      map[string]targetMeta{},
+	remoteByAlt:       map[string]remoteFlag{},
+	hasRemoteByTarget: map[string]bool{},
 }
 
 // Index keeps the latest snapshot accessible to handlers via atomic
@@ -140,6 +176,33 @@ func (i *Index) Rebuild(ctx context.Context) error {
 		cookieByService[et.Namespace+"/"+et.Spec.Target.Service.Name] = et.Spec.SourceCookie
 	}
 
+	// (namespace/rrName) → reachable tristate. RemoteRoute's metadata.name
+	// equals the variant Service name (the controller invariant), so we
+	// can decorate any tuple whose alternative matches an RR in the same
+	// namespace.
+	var rrList routeprismv1alpha1.RemoteRouteList
+	if err := i.cli.List(ctx, &rrList); err != nil {
+		return err
+	}
+	type rrInfo struct{ reachable *bool }
+	rrByNsName := make(map[string]rrInfo, len(rrList.Items))
+	for j := range rrList.Items {
+		rr := &rrList.Items[j]
+		if !rr.DeletionTimestamp.IsZero() {
+			continue
+		}
+		var reachable *bool
+		for _, c := range rr.Status.Conditions {
+			if c.Type != "UpstreamReachable" {
+				continue
+			}
+			v := c.Status == metav1.ConditionTrue
+			reachable = &v
+			break
+		}
+		rrByNsName[rr.Namespace+"/"+rr.Name] = rrInfo{reachable: reachable}
+	}
+
 	// Resolve owner per routingKey: older creationTimestamp wins; ties by name.
 	owners := make(map[string]*routeprismv1alpha1.ContextRoute, len(crList.Items))
 	for j := range crList.Items {
@@ -168,6 +231,8 @@ func (i *Index) Rebuild(ctx context.Context) error {
 
 	altMap := make(map[string]altEntry, len(owners))
 	metaMap := make(map[string]targetMeta, len(owners))
+	remoteByAlt := map[string]remoteFlag{}
+	hasRemoteByTarget := map[string]bool{}
 	var tuples []TupleEntry
 	for key, owner := range owners {
 		entry, err := i.buildAltEntry(ctx, owner)
@@ -182,13 +247,24 @@ func (i *Index) Rebuild(ctx context.Context) error {
 		}
 		service := owner.Namespace + "/" + owner.Spec.Target.Service.Name
 		for _, alt := range entry.list {
-			tuples = append(tuples, TupleEntry{
+			te := TupleEntry{
 				Service:      service,
 				Alternative:  alt,
 				Tuple:        service + ":" + alt,
 				RoutingKey:   key,
 				SourceCookie: cookie,
-			})
+			}
+			if alt == SelfAlternative {
+				te.Self = true
+			} else {
+				if info, ok := rrByNsName[owner.Namespace+"/"+alt]; ok {
+					te.Remote = true
+					te.Reachable = info.reachable
+					remoteByAlt[key+":"+alt] = remoteFlag{reachable: info.reachable}
+					hasRemoteByTarget[key] = true
+				}
+			}
+			tuples = append(tuples, te)
 		}
 	}
 	sort.Slice(tuples, func(i, j int) bool { return tuples[i].Tuple < tuples[j].Tuple })
@@ -198,12 +274,14 @@ func (i *Index) Rebuild(ctx context.Context) error {
 	}
 
 	i.snap.Store(&snapshot{
-		targets:      targets,
-		targetsLower: targetsLower,
-		altByTarget:  altMap,
-		metaByTarget: metaMap,
-		tuples:       tuples,
-		tuplesLower:  tuplesLower,
+		targets:           targets,
+		targetsLower:      targetsLower,
+		altByTarget:       altMap,
+		metaByTarget:      metaMap,
+		remoteByAlt:       remoteByAlt,
+		hasRemoteByTarget: hasRemoteByTarget,
+		tuples:            tuples,
+		tuplesLower:       tuplesLower,
 	})
 	return nil
 }

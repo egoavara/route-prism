@@ -174,6 +174,8 @@ k8s_resource(
 #   curl -H 'Cookie: x-route-prism=demo.web:web-canary'  http://localhost:8080/api  → web canary
 #   curl                                       http://localhost:8081/api  → api direct
 #   curl                                       http://localhost:8083/api  → db direct
+#   curl -H 'Cookie: x-route-prism=demo.db:db-laptop' http://localhost:8080/api
+#                                              → web → api → db (RemoteRoute) → host:18083
 k8s_yaml("test/devloop/sample.yaml")
 
 DEMO_TIERS = ["web", "api", "db"]
@@ -216,6 +218,118 @@ k8s_resource(
     labels = ["dev"],
     resource_deps = ["controller"],
 )
+
+# ──────────────────────────────────────────────────────────────────────
+# 6) RemoteRoute demo: divert demo.db traffic to a sample-tier process
+#    running on the developer's host machine.
+#
+# Topology:
+#
+#   curl -H 'Cookie: x-route-prism=demo.db:db-laptop' http://localhost:8080/api
+#       → demo-edge → web → api → db Service
+#       → CR HTTPRoute matches baggage demo.db=db-laptop → routes to
+#         Service "db-laptop" (created by the RemoteRoute controller)
+#       → Envoy proxy Pod → upstream HOST_IP:REMOTE_TIER_PORT
+#       → sample-tier-host running as a Tilt local_resource.
+#
+# To "simulate the PC going offline" just stop the `remote-tier` resource
+# in the Tilt UI — Envoy active health-checks flip the upstream unhealthy
+# within ~10s and the RemoteRoute status surfaces the change.
+
+# How a kind Pod reaches the developer's host machine depends on the
+# Docker variant:
+#
+#   - Docker Desktop (mac, win, wsl2): Docker daemon + kind run inside a
+#     hidden Docker VM. The host is exposed inside that VM under the magic
+#     hostname `host.docker.internal` (typically 192.168.65.254). The
+#     kind bridge gateway (172.18.0.1) lives in the Docker VM and is
+#     NOT routable from the WSL distro where sample-tier-host listens.
+#   - Linux native Docker: no Docker VM, `host.docker.internal` may not
+#     resolve, but the kind bridge gateway IS the host so 172.18.0.1
+#     works directly.
+#
+# We resolve from inside the kind control-plane container — that's the
+# same network namespace the proxy Pods will run in — and prefer
+# host.docker.internal when it resolves, falling back to the bridge
+# gateway. The result is a literal IPv4 address baked into the
+# RemoteRoute upstream URL (Pods don't inherit the kind node's /etc/hosts
+# so we cannot use the hostname directly).
+HOST_IP = str(local("""
+node="route-prism-control-plane"
+ip=$(docker exec "$node" getent hosts host.docker.internal 2>/dev/null | awk '{print $1}' | head -1)
+if [ -z "$ip" ]; then
+  ip=$(docker network inspect kind -f '{{(index .IPAM.Config 0).Gateway}}' 2>/dev/null)
+fi
+echo "${ip:-172.18.0.1}"
+""", quiet = True)).strip()
+REMOTE_TIER_PORT = 18083
+print("→ kind→host gateway: %s (sample-tier listens on %d)" % (HOST_IP, REMOTE_TIER_PORT))
+
+# Compile a host-native sample-tier so it actually runs on the developer's
+# OS. Distinct from sample-tier-linux which is baked into the in-cluster
+# image; on Linux/WSL these end up identical, on macOS/Windows they
+# differ.
+local_resource(
+    "remote-tier-compile",
+    cmd = "go build -o bin/sample-tier-host ./cmd/sample-tier",
+    deps = ["cmd/sample-tier", "go.mod", "go.sum"],
+    labels = ["remote"],
+)
+
+# The "developer's PC" — sample-tier as a host process. Stopping this
+# resource in the Tilt UI lets you observe the RemoteRoute reporting
+# UpstreamReachable=False and the dashboard / curl chain falling back to
+# 5xx (since this RR has no fallback in-cluster variant).
+local_resource(
+    "remote-tier",
+    serve_cmd = "PORT=%d TIER=db VARIANT=db-laptop bin/sample-tier-host" % REMOTE_TIER_PORT,
+    deps = ["bin/sample-tier-host"],
+    resource_deps = ["remote-tier-compile"],
+    labels = ["remote"],
+    readiness_probe = probe(
+        period_secs = 5,
+        http_get = http_get_action(port = REMOTE_TIER_PORT, path = "/"),
+    ),
+)
+
+# RemoteRoute object pointing demo.db → host:18083. The RR controller
+# provisions an Envoy reverse-proxy Deployment + Service named "db-laptop"
+# that the demo db ContextRoute auto-discovers as a variant (matchLabels
+# app=db is copied onto the Service by the controller).
+REMOTE_YAML = """
+apiVersion: route-prism.egoavara.net/v1alpha1
+kind: RemoteRoute
+metadata:
+  name: db-laptop
+  namespace: demo
+spec:
+  contextRouteRef:
+    name: db-route
+  healthCheck:
+    type: HTTP
+    http:
+      path: /
+  upstreams:
+    - name: laptop
+      url: http://%s:%d
+""" % (HOST_IP, REMOTE_TIER_PORT)
+
+k8s_yaml(blob(REMOTE_YAML))
+
+k8s_resource(
+    new_name = "remote-objects",
+    objects = ["db-laptop:RemoteRoute:demo"],
+    labels = ["remote"],
+    resource_deps = ["controller", "demo-objects", "remote-tier"],
+)
+
+# The RR controller spawns its own Envoy Deployment / Service / ConfigMap
+# in the demo namespace (named route-prism-remote-db-laptop / db-laptop /
+# route-prism-remote-db-laptop-admin). They don't appear as Tilt resources
+# because they're not in any k8s_yaml — inspect with:
+#
+#   kubectl -n demo get pods,svc,cm -l route-prism.egoavara.net/owner=db-laptop
+#   kubectl -n demo describe remoteroute db-laptop
 
 # Both buttons run the same Ginkgo binary under test/e2e/, filtered by
 # label. -count=1 disables the test cache so re-clicks always re-run.

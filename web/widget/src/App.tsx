@@ -3,7 +3,7 @@ import createFuzzySearch from '@nozbe/microfuzz'
 import type { TupleEntry, WidgetConfig } from './types'
 import { listTuples } from './api'
 import { parse, readCookie, setEntry } from './cookieStore'
-import { useHotkey } from './useHotkey'
+import { formatChord, useHotkey } from './useHotkey'
 import { TupleList, type TupleRow } from './components/TupleList'
 
 interface Props {
@@ -42,6 +42,80 @@ export function App({ config }: Props) {
     return false
   }, [entries])
   const needsReload = ownVariant !== initialOwnVariantRef.current
+
+  // selectedList is every (routingKey, alternative) the user currently
+  // overrides — i.e. every entry whose value is not the "." default.
+  // The closed-state button cycles through this list so a multi-tier
+  // selection (e.g. demo.web=canary AND demo.db=laptop) doesn't get
+  // hidden behind a single static label.
+  const selectedList = useMemo(() => {
+    const out: { routingKey: string; alternative: string }[] = []
+    for (const [k, v] of entries) {
+      if (v && v !== '.') out.push({ routingKey: k, alternative: v })
+    }
+    return out
+  }, [entries])
+
+  // unavailableList is the subset of selectedList currently failing
+  // their reachability check (RemoteRoute upstreams that don't respond
+  // — could be a dev PC, a staging server, anything; the wording stays
+  // generic). Drives the closed-state alarm so users notice "this
+  // selection is broken right now" without opening the panel.
+  const [unavailableList, setUnavailableList] = useState<
+    { routingKey: string; alternative: string }[]
+  >([])
+  const hasUnavailable = unavailableList.length > 0
+
+  // Background poll — refreshes the alarm list every 15s independent
+  // of whether the panel is open. Cheap (one /tuple call, <1KB on
+  // typical demos). Skipped when the user has no active overrides.
+  useEffect(() => {
+    if (selectedList.length === 0) {
+      setUnavailableList([])
+      return
+    }
+    let cancelled = false
+    const check = async () => {
+      try {
+        const resp = await listTuples(config, '', 500)
+        if (cancelled) return
+        const next: { routingKey: string; alternative: string }[] = []
+        for (const e of resp.items ?? []) {
+          if (!e.remote || e.reachable !== false) continue
+          if (entries.get(e.routingKey) === e.alternative) {
+            next.push({ routingKey: e.routingKey, alternative: e.alternative })
+          }
+        }
+        setUnavailableList(next)
+      } catch {
+        // leave previous state — transient network errors shouldn't
+        // flip the alarm in either direction.
+      }
+    }
+    void check()
+    const id = window.setInterval(check, 15_000)
+    return () => {
+      cancelled = true
+      window.clearInterval(id)
+    }
+  }, [entries, selectedList, config])
+
+  // cycleIdx rotates through whichever list the closed-state button
+  // is currently surfacing (alarm > active). Reset to 0 whenever the
+  // active list changes shape so the rotation always starts from the
+  // top after a selection edit. Interval is intentionally slow (5s)
+  // so the user has time to read each entry; the fade animation on
+  // .rp-button-label covers the visual transition.
+  const cycleList = hasUnavailable ? unavailableList : selectedList
+  const [cycleIdx, setCycleIdx] = useState(0)
+  useEffect(() => {
+    setCycleIdx(0)
+    if (cycleList.length <= 1) return
+    const id = window.setInterval(() => {
+      setCycleIdx((i) => (i + 1) % cycleList.length)
+    }, 5000)
+    return () => window.clearInterval(id)
+  }, [cycleList])
 
   // Open / close.
   const handleOpen = useCallback(() => setOpen((v) => !v), [])
@@ -146,11 +220,55 @@ export function App({ config }: Props) {
 
   const reload = useCallback(() => window.location.reload(), [])
 
-  const buttonLabel = isOwnActive ? `route: ${ownVariant}` : 'route: default'
-  // Yellow takes precedence over blue: if this tier needs a reload the
-  // user should see the reload affordance regardless of any other active
-  // overrides.
-  const stateClass = needsReload ? 'rp-needs-reload' : hasAnyActive ? 'rp-active' : ''
+  // Closed-state label. Cycles through the active selection so a
+  // multi-tier override (e.g. demo.web=canary AND demo.db=laptop) is
+  // visible without opening the panel. When at least one selected
+  // variant is unreachable, the cycle narrows to those rows and the
+  // label gains a generic "unavailable" prefix — "host PC" wording is
+  // avoided because RemoteRoute upstreams can be anything (a laptop,
+  // a staging box, an external service).
+  let buttonLabel: string
+  let buttonTitle: string
+  if (hasUnavailable) {
+    const e = cycleList[cycleIdx % cycleList.length]
+    buttonLabel = `unavailable · ${e.routingKey}=${e.alternative}`
+    buttonTitle =
+      unavailableList.length === 1
+        ? 'Selected route is currently unreachable; traffic to it will fail.'
+        : `${unavailableList.length} selected routes are currently unreachable; traffic to them will fail.`
+  } else if (selectedList.length > 0) {
+    const e = cycleList[cycleIdx % cycleList.length]
+    buttonLabel = `${e.routingKey}=${e.alternative}`
+    buttonTitle =
+      selectedList.length === 1
+        ? `routing override active · ${e.routingKey}=${e.alternative}`
+        : `${selectedList.length} routing overrides active`
+  } else {
+    buttonLabel = 'route: default'
+    buttonTitle = 'no routing override active'
+  }
+  // When a hotkey is configured, append it to the tooltip so users see
+  // the binding on hover. Two newlines so the binding visually
+  // separates from the state copy in the native browser tooltip.
+  const hotkeyHint = formatChord(config.style?.hotkey?.open)
+  if (hotkeyHint) {
+    buttonTitle = `${buttonTitle}\n\n${hotkeyHint} to toggle`
+  }
+  // Priority (highest wins):
+  //   alarm        — at least one selected variant is unreachable
+  //   needs-reload — own-tier variant drifted from page-render snapshot
+  //   active       — at least one non-default override is set
+  const stateClass = hasUnavailable
+    ? 'rp-alarm'
+    : needsReload
+      ? 'rp-needs-reload'
+      : hasAnyActive
+        ? 'rp-active'
+        : ''
+  // Suppress isOwnActive — kept for parity with prior code paths but
+  // no longer drives the label since selectedList covers the same info.
+  void isOwnActive
+  void ownVariant
 
   return (
     <div
@@ -192,18 +310,30 @@ export function App({ config }: Props) {
         <button
           class={`rp-tab ${stateClass}`}
           onClick={handleOpen}
-          title={buttonLabel}
+          title={buttonTitle}
         >
-          route prism
+          {/* Same cycling label as the floating button, just rotated
+             with the sidebar's vertical writing-mode. Re-mounted on
+             every label change (key={buttonLabel}) so rp-tab-label-in
+             replays as a fade/slide on each rotation. */}
+          <span key={buttonLabel} class="rp-tab-label">
+            {buttonLabel}
+          </span>
         </button>
       ) : (
         <button
           class={`rp-button ${stateClass}`}
           onClick={handleOpen}
-          title={buttonLabel}
+          title={buttonTitle}
         >
           <span class="rp-dot" />
-          {buttonLabel}
+          {/* key={buttonLabel} re-mounts the span on every change so the
+             rp-label-in keyframe replays — gives the rotation a soft
+             fade/slide instead of a snap. Using the label string as the
+             key (rather than cycleIdx) also covers selection edits. */}
+          <span key={buttonLabel} class="rp-button-label">
+            {buttonLabel}
+          </span>
         </button>
       )}
     </div>

@@ -1,0 +1,32 @@
+apiVersion: route-prism.egoavara.net/v1alpha1
+kind: RemoteRoute
+metadata:
+  labels:
+    app.kubernetes.io/name: route-prism
+    app.kubernetes.io/managed-by: kustomize
+  # The metadata.name doubles as the variant key — Baggage value
+  # "<routingKey>=my-laptop" routes traffic through this RemoteRoute.
+  name: my-laptop
+spec:
+  contextRouteRef:
+    name: contextroute-sample
+  # Optional TLS knobs — only matters when an upstream URL is https.
+  tls:
+    insecureSkipVerify: false
+  # Optional active health check override. Defaults to TCP when omitted.
+  healthCheck:
+    type: TCP
+  # Upstreams are priority-ordered (index 0 = highest). Envoy uses the
+  # next priority slot only when every endpoint in the higher slot is
+  # marked unhealthy by the active health check.
+  upstreams:
+    - name: main-pc
+      url: http://192.168.0.11:3000
+    - name: vpn-pc
+      url: http://10.123.1.234:3000
+    - name: alt-ips
+      group:
+        mode: RoundRobin
+        urls:
+          - http://10.0.0.5:3000
+          - http://10.0.0.6:3000

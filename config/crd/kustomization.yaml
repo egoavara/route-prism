@@ -4,6 +4,7 @@
 resources:
 - bases/route-prism.egoavara.net_contextroutes.yaml
 - bases/route-prism.egoavara.net_edgetransformations.yaml
+- bases/route-prism.egoavara.net_remoteroutes.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patches:

@@ -3,6 +3,21 @@ export interface ServiceItem {
   // Cookie name an EdgeTransformation lifts into Baggage for this target.
   // Empty/missing when the target has no EdgeTransformation attached.
   translator?: string
+  // /service responses: true when at least one alternative on this
+  // target is backed by a RemoteRoute. Used by the dashboard to show a
+  // "remote" badge on the service row without a per-row /alternative
+  // round-trip.
+  hasRemote?: boolean
+  // /alternative responses: true on the synthetic row that represents
+  // the default / unmarked traffic path. Explicit discriminator —
+  // never compare `target === "."`.
+  self?: boolean
+  // /alternative responses: per-alternative RemoteRoute flags.
+  // remote=true means traffic to this alt leaves the cluster for a
+  // developer's PC; reachable mirrors the RR's UpstreamReachable
+  // condition (true/false; undefined = status not yet reported).
+  remote?: boolean
+  reachable?: boolean
 }
 
 export interface ListResponse {

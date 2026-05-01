@@ -8,6 +8,29 @@ export interface ParsedChord {
   key: string
 }
 
+// formatChord renders a chord spec ("ctrl+\\") in the conventional
+// platform style ("Ctrl+\\" or "⌘\\" on mac). Returns "" for unparseable
+// or empty specs so the caller can omit the hint without branching.
+export function formatChord(spec: string | undefined): string {
+  const c = spec ? parseChord(spec) : null
+  if (!c) return ''
+  const isMac =
+    typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform)
+  const parts: string[] = []
+  if (c.ctrl) parts.push(isMac ? '⌃' : 'Ctrl')
+  if (c.alt) parts.push(isMac ? '⌥' : 'Alt')
+  if (c.shift) parts.push(isMac ? '⇧' : 'Shift')
+  if (c.meta) parts.push(isMac ? '⌘' : 'Meta')
+  // Pretty-print common keys; otherwise capitalize the first character.
+  let key = c.key
+  if (key === 'esc') key = 'Esc'
+  else if (key === 'space') key = 'Space'
+  else if (key.length === 1) key = key.toUpperCase()
+  else key = key.charAt(0).toUpperCase() + key.slice(1)
+  parts.push(key)
+  return isMac ? parts.join('') : parts.join('+')
+}
+
 export function parseChord(spec: string): ParsedChord | null {
   if (!spec) return null
   const parts = spec

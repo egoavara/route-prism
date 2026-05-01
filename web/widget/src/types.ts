@@ -7,6 +7,21 @@ export interface TupleEntry {
   tuple: string
   routingKey: string
   sourceCookie?: string
+  // self=true → synthetic "default / unmarked traffic" row. Explicit
+  // discriminator; do NOT compare alternative === "." even though that
+  // sentinel currently happens to match.
+  self?: boolean
+  // remote=true → this alternative is backed by a RemoteRoute; selecting
+  // it routes traffic out of the cluster to a developer's PC. The widget
+  // surfaces this with a small badge and gates it on `reachable` so the
+  // user sees an explicit "PC offline" state rather than a silent 5xx.
+  remote?: boolean
+  // reachable mirrors the RemoteRoute's UpstreamReachable condition.
+  // Only meaningful when remote=true:
+  //   true  — host PC responds to active health checks
+  //   false — all upstreams unhealthy; selecting will return 5xx
+  //   undefined — status not yet populated by the controller
+  reachable?: boolean
 }
 
 export interface TupleListResponse {
@@ -28,10 +43,12 @@ export interface WidgetHotkey {
 // `anchor` decides which viewport edge/corner the widget docks to. The
 // allowed values depend on `mode`:
 //   - float:   one of the four corners
-//   - sidebar: one of the two vertical sides
+//   - sidebar: any of the four edges (left/right use vertical writing
+//              mode, top/bottom use horizontal — the cycling label
+//              orientation flips automatically)
 // Defaults are 'bottom-right' (float) and 'right' (sidebar).
 export type FloatAnchor = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right'
-export type SidebarAnchor = 'left' | 'right'
+export type SidebarAnchor = 'left' | 'right' | 'top' | 'bottom'
 
 export interface WidgetStyle {
   mode?: 'float' | 'sidebar'

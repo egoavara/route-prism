@@ -1,4 +1,15 @@
-import { Check, ChevronDown, ChevronUp, Copy, Cookie, Trash2, X } from 'lucide-react'
+import {
+  Check,
+  ChevronDown,
+  ChevronUp,
+  CornerDownLeft,
+  Copy,
+  Cookie,
+  GitBranch,
+  Laptop,
+  Trash2,
+  X,
+} from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -12,13 +23,6 @@ import { listAlternatives, listServices, type ServiceItem } from '@/api'
 const PAGE_SIZE = 100
 const SELF_ALTERNATIVE = '.'
 
-// Prism palette — same hues used by the icon (red/green/blue refraction
-// rays). Cycled across alternatives to suggest divergent routes from a
-// single source.
-const PRISM_PALETTE = ['#ef4444', '#22c55e', '#3b82f6'] as const
-
-const prismColor = (i: number): string => PRISM_PALETTE[i % PRISM_PALETTE.length]
-
 interface CartItem {
   alternative: string
   // Captured at selection time so cart composition doesn't depend on
@@ -28,10 +32,22 @@ interface CartItem {
 
 type Cart = Record<string, CartItem>
 
+interface AlternativeItem {
+  name: string
+  // self=true marks the synthetic "default path / unmarked traffic"
+  // entry. Wire field; do NOT discriminate on `name === "."` even
+  // though the controller currently uses that sentinel.
+  self?: boolean
+  // Mirrors ServiceItem.remote/reachable on the wire — only populated
+  // when the alternative is backed by a RemoteRoute.
+  remote?: boolean
+  reachable?: boolean
+}
+
 interface AlternativesData {
   routingKey: string
   sourceCookie?: string
-  alternatives: string[]
+  alternatives: AlternativeItem[]
 }
 
 function useDebouncedValue<T>(value: T, delayMs: number): T {
@@ -228,6 +244,19 @@ function ServiceListPanel(props: ServiceListPanelProps) {
                         aria-label="in cart"
                       />
                     )}
+                    {s.hasRemote && (
+                      <span
+                        className={
+                          'inline-flex shrink-0 items-center gap-1 rounded-md border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider ' +
+                          (isSelected
+                            ? 'border-primary-foreground/30 text-primary-foreground/80'
+                            : 'border-sky-500/40 bg-sky-500/10 text-sky-700 dark:text-sky-400')
+                        }
+                        title="this target has at least one RemoteRoute-backed alternative"
+                      >
+                        REMOTE
+                      </span>
+                    )}
                     <ETBadge cookieName={s.translator} muted={isSelected} />
                   </button>
                 </li>
@@ -322,13 +351,20 @@ function AlternativesPanel({ target, cart, onToggle }: AlternativesPanelProps) {
       setLoading(true)
       setError(null)
       try {
-        const all: string[] = []
+        const all: AlternativeItem[] = []
         let cursor: string | undefined
         let routingKey = target
         let sourceCookie: string | undefined
         do {
           const res = await listAlternatives(target, { limit: 500, cursor })
-          all.push(...res.items.map((i) => i.target))
+          all.push(
+            ...res.items.map((i) => ({
+              name: i.target,
+              self: i.self,
+              remote: i.remote,
+              reachable: i.reachable,
+            })),
+          )
           cursor = res.nextCursor
           routingKey = res.routingKey || target
           if (res.sourceCookie) sourceCookie = res.sourceCookie
@@ -365,8 +401,9 @@ function AlternativesPanel({ target, cart, onToggle }: AlternativesPanelProps) {
     )
   }
 
-  const alternatives = data?.alternatives.filter((a) => a !== SELF_ALTERNATIVE) ?? []
-  const hasSelf = data?.alternatives.includes(SELF_ALTERNATIVE) ?? false
+  const alternatives = data?.alternatives.filter((a) => !a.self) ?? []
+  const selfEntry = data?.alternatives.find((a) => a.self)
+  const hasSelf = !!selfEntry
   const cartChoice = cart[target]?.alternative
 
   return (
@@ -431,23 +468,27 @@ function AlternativesPanel({ target, cart, onToggle }: AlternativesPanelProps) {
           {loading && !data && <p className="text-sm text-muted-foreground">Loading…</p>}
           {data && (
             <ul className="flex flex-col gap-1.5">
-              <li>
-                <RouteOption
-                  label={SELF_ALTERNATIVE}
-                  description="self · unmarked traffic"
-                  selected={!cartChoice}
-                  onClick={() => onToggle(target, SELF_ALTERNATIVE)}
-                  disabled={!hasSelf}
-                  marker="self"
-                />
-              </li>
-              {alternatives.map((alt, i) => (
-                <li key={alt}>
+              {selfEntry && (
+                <li>
                   <RouteOption
-                    label={alt}
-                    selected={cartChoice === alt}
-                    onClick={() => onToggle(target, alt, data.sourceCookie)}
-                    markerColor={prismColor(i)}
+                    label={selfEntry.name}
+                    description="default · unmarked traffic"
+                    selected={!cartChoice}
+                    onClick={() => onToggle(target, selfEntry.name)}
+                    disabled={!hasSelf}
+                    kind="default"
+                  />
+                </li>
+              )}
+              {alternatives.map((alt) => (
+                <li key={alt.name}>
+                  <RouteOption
+                    label={alt.name}
+                    selected={cartChoice === alt.name}
+                    onClick={() => onToggle(target, alt.name, data.sourceCookie)}
+                    kind={alt.remote ? 'remote' : 'variant'}
+                    remote={alt.remote}
+                    reachable={alt.reachable}
                   />
                 </li>
               ))}
@@ -462,23 +503,49 @@ function AlternativesPanel({ target, cart, onToggle }: AlternativesPanelProps) {
   )
 }
 
+type RouteKind = 'default' | 'variant' | 'remote'
+
 interface RouteOptionProps {
   label: string
   description?: string
   selected: boolean
   onClick: () => void
   disabled?: boolean
-  marker?: 'self'
-  markerColor?: string
+  // kind drives the leading lucide icon — and is the SOURCE OF TRUTH
+  // for "default vs alternative" in the UI:
+  //   default → CornerDownLeft  (no diversion; stays on target)
+  //   variant → GitBranch       (in-cluster variant)
+  //   remote  → Laptop          (RemoteRoute → developer's PC)
+  // Icons are uncolored on purpose — the only colored signals in this
+  // panel are reachability (red=offline, green=online); decorative
+  // colors would compete with that semantic.
+  kind: RouteKind
+  // RemoteRoute affordance — when remote=true a tristate badge renders
+  // on the right and (when reachable=false) the label tints red so an
+  // offline upstream is visible before the user clicks through.
+  remote?: boolean
+  reachable?: boolean
 }
 
 function RouteOption(props: RouteOptionProps) {
-  const { label, description, selected, onClick, disabled, marker, markerColor } = props
+  const { label, description, selected, onClick, disabled, kind, remote, reachable } = props
+  const isOffline = remote && reachable === false
   return (
     <button
       type="button"
       onClick={onClick}
       disabled={disabled}
+      title={
+        remote
+          ? reachable === false
+            ? 'remote (RemoteRoute) — host PC offline; selecting will return 5xx'
+            : reachable === true
+              ? 'remote (RemoteRoute) — host PC reachable'
+              : 'remote (RemoteRoute) — reachability unknown'
+          : kind === 'default'
+            ? 'default path — unmarked traffic flows to the target Service'
+            : 'in-cluster variant'
+      }
       className={
         'flex w-full items-center gap-3 rounded-md border px-3 py-2 text-left transition-colors ' +
         (selected
@@ -496,18 +563,61 @@ function RouteOption(props: RouteOptionProps) {
       >
         {selected && <span className="h-2 w-2 rounded-full bg-primary" />}
       </span>
-      {marker === 'self' ? (
-        <span className="inline-block h-2 w-2 shrink-0 rounded-full bg-emerald-500" aria-hidden />
-      ) : (
-        <span
-          aria-hidden
-          className="inline-block h-2 w-2 shrink-0 rounded-full"
-          style={{ backgroundColor: markerColor }}
-        />
-      )}
-      <span className="min-w-0 flex-1 truncate font-mono text-sm">{label}</span>
+      <RouteKindIcon kind={kind} />
+      <span
+        className={
+          'min-w-0 flex-1 truncate font-mono text-sm ' +
+          (isOffline ? 'text-red-600 dark:text-red-400' : '')
+        }
+      >
+        {label}
+      </span>
       {description && <span className="text-xs text-muted-foreground">{description}</span>}
+      {remote && <RemoteBadge reachable={reachable} />}
     </button>
+  )
+}
+
+interface RouteKindIconProps {
+  kind: RouteKind
+}
+
+function RouteKindIcon({ kind }: RouteKindIconProps) {
+  const Icon = kind === 'default' ? CornerDownLeft : kind === 'remote' ? Laptop : GitBranch
+  return <Icon aria-hidden className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+}
+
+interface RemoteBadgeProps {
+  reachable?: boolean
+}
+
+// RemoteBadge surfaces the RemoteRoute reachability as a tiny pill.
+// Tristate: online (green), offline (red), unknown (grey).
+function RemoteBadge({ reachable }: RemoteBadgeProps) {
+  const state =
+    reachable === true ? 'online' : reachable === false ? 'offline' : 'unknown'
+  const cls =
+    state === 'online'
+      ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
+      : state === 'offline'
+        ? 'border-red-500/50 bg-red-500/10 text-red-700 dark:text-red-400'
+        : 'border-muted-foreground/30 bg-muted/40 text-muted-foreground'
+  const dot =
+    state === 'online'
+      ? 'bg-emerald-500'
+      : state === 'offline'
+        ? 'bg-red-500'
+        : 'bg-muted-foreground/60'
+  return (
+    <span
+      className={
+        'inline-flex shrink-0 items-center gap-1 rounded-md border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider ' +
+        cls
+      }
+    >
+      <span className={'h-1.5 w-1.5 rounded-full ' + dot} aria-hidden />
+      {state === 'offline' ? 'offline' : 'remote'}
+    </span>
   )
 }
 

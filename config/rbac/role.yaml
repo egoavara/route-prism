@@ -62,6 +62,7 @@ rules:
   resources:
   - contextroutes
   - edgetransformations
+  - remoteroutes
   verbs:
   - create
   - delete
@@ -74,6 +75,7 @@ rules:
   - route-prism.egoavara.net
   resources:
   - contextroutes/finalizers
+  - remoteroutes/finalizers
   verbs:
   - update
 - apiGroups:
@@ -81,6 +83,7 @@ rules:
   resources:
   - contextroutes/status
   - edgetransformations/status
+  - remoteroutes/status
   verbs:
   - get
   - patch
