@@ -43,3 +43,7 @@ internal/widget/dist/*
 
 # Git worktrees and sibling clones (e.g. .worktree/.wiki for the GitHub wiki).
 .worktree/
+
+# Local agent configuration file
+AGENTS.local.md
+CLAUDE.local.md

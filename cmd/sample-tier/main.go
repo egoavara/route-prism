@@ -1,7 +1,6 @@
 /*
-Copyright 2026.
-
-Licensed under the Apache License, Version 2.0 (the "License").
+Copyright 2026 egoavara.
+SPDX-License-Identifier: MIT
 */
 
 // sample-tier — minimal HTTP service used by the devloop sample's 3-tier

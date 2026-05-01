@@ -1,8 +1,6 @@
 /*
-Copyright 2026.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
+Copyright 2026 egoavara.
+SPDX-License-Identifier: MIT
 */
 
 // Package preflight runs a one-shot startup check that the surrounding
