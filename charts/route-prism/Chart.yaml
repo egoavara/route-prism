@@ -1,0 +1,18 @@
+apiVersion: v2
+name: route-prism
+description: Context-aware GAMMA routing controller for Kubernetes.
+type: application
+version: 0.0.0
+appVersion: 0.0.0
+home: https://github.com/egoavara/route-prism
+sources:
+  - https://github.com/egoavara/route-prism
+keywords:
+  - kubernetes
+  - gateway-api
+  - gamma
+  - service-mesh
+  - routing
+maintainers:
+  - name: egoavara
+    url: https://github.com/egoavara

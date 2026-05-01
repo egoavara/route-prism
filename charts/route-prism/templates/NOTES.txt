@@ -1,0 +1,9 @@
+route-prism {{ .Chart.AppVersion }} installed in namespace "{{ .Release.Namespace }}".
+
+Inspect the controller:
+  kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ include "route-prism.fullname" . }}
+  kubectl -n {{ .Release.Namespace }} logs deploy/{{ include "route-prism.fullname" . }} -f
+
+CRDs were installed from the chart's `crds/` directory. Helm does NOT upgrade
+or delete them automatically. To remove them manually:
+  kubectl delete crd contextroutes.route-prism.egoavara.net edgetransformations.route-prism.egoavara.net remoteroutes.route-prism.egoavara.net

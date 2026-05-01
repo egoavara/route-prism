@@ -1,0 +1,80 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "route-prism.fullname" . }}-manager
+  labels:
+    {{- include "route-prism.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [configmaps, services]
+    verbs: [create, delete, get, list, patch, update, watch]
+  - apiGroups: [""]
+    resources: [events]
+    verbs: [create, patch, update]
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [create, delete, get, list, patch, update, watch]
+  - apiGroups: [discovery.k8s.io]
+    resources: [endpointslices]
+    verbs: [get, list, watch]
+  - apiGroups: [gateway.networking.k8s.io]
+    resources: [httproutes]
+    verbs: [create, delete, get, list, patch, update, watch]
+  - apiGroups: [route-prism.egoavara.net]
+    resources: [contextroutes, edgetransformations, remoteroutes]
+    verbs: [create, delete, get, list, patch, update, watch]
+  - apiGroups: [route-prism.egoavara.net]
+    resources: [contextroutes/finalizers, remoteroutes/finalizers]
+    verbs: [update]
+  - apiGroups: [route-prism.egoavara.net]
+    resources: [contextroutes/status, edgetransformations/status, remoteroutes/status]
+    verbs: [get, patch, update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "route-prism.fullname" . }}-manager
+  labels:
+    {{- include "route-prism.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "route-prism.fullname" . }}-manager
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "route-prism.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "route-prism.fullname" . }}-leader-election
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "route-prism.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [""]
+    resources: [events]
+    verbs: [create, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "route-prism.fullname" . }}-leader-election
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "route-prism.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "route-prism.fullname" . }}-leader-election
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "route-prism.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}

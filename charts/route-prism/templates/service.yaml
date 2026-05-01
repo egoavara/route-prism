@@ -1,0 +1,37 @@
+{{- if .Values.service.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "route-prism.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "route-prism.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    {{- include "route-prism.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: api
+      port: {{ .Values.service.port }}
+      targetPort: api
+      protocol: TCP
+{{- end }}
+{{- if .Values.metrics.service.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "route-prism.fullname" . }}-metrics
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "route-prism.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "route-prism.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: metrics
+      port: {{ .Values.metrics.service.port }}
+      targetPort: probe
+      protocol: TCP
+{{- end }}

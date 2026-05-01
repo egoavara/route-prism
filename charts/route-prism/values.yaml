@@ -1,0 +1,77 @@
+# Default values for route-prism.
+
+image:
+  repository: ghcr.io/egoavara/route-prism
+  pullPolicy: IfNotPresent
+  # Overrides Chart.appVersion when set.
+  tag: ""
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+replicaCount: 1
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podAnnotations:
+  kubectl.kubernetes.io/default-container: manager
+
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  readOnlyRootFilesystem: true
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 128Mi
+  requests:
+    cpu: 10m
+    memory: 64Mi
+
+# Manager CLI flags. Override individual entries by re-declaring the slice.
+args:
+  - run
+  - --leader.enabled=true
+  - --health.probe-bind-address=:8081
+  - --api.bind-address=:8082
+  - --otel.prometheus.enabled=true
+  - --otel.prometheus.path=/metrics
+
+# Probe ports (must align with `args` above).
+healthProbePort: 8081
+apiPort: 8082
+
+service:
+  enabled: true
+  type: ClusterIP
+  port: 8082
+
+metrics:
+  # Expose a separate Service for Prometheus scraping.
+  service:
+    enabled: true
+    port: 8080
+  serviceMonitor:
+    enabled: false
+    additionalLabels: {}
+    interval: 30s
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+extraEnv: []
+extraVolumes: []
+extraVolumeMounts: []

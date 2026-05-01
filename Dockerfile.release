@@ -1,0 +1,13 @@
+# Slim release Dockerfile — consumes a prebuilt operator binary produced by
+# the GitHub Actions release workflow. The full multi-stage build lives in
+# Dockerfile and is used for local development.
+FROM gcr.io/distroless/static:nonroot
+# Re-declare without defaults so buildx's auto-injected platform values
+# (TARGETOS=linux, TARGETARCH=amd64|arm64|...) are used as-is. Setting a
+# default here would mask the per-platform value during multi-arch builds.
+ARG TARGETOS
+ARG TARGETARCH
+WORKDIR /
+COPY dist/manager_${TARGETOS}_${TARGETARCH} /manager
+USER 65532:65532
+ENTRYPOINT ["/manager"]
