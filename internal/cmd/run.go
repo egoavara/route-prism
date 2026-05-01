@@ -262,7 +262,7 @@ func registerPreflight(mgr ctrl.Manager) error {
 	if err := mgr.Add(preflight.New(
 		mgr.GetConfig(),
 		mgr.GetScheme(),
-		mgr.GetEventRecorderFor("route-prism-preflight"),
+		mgr.GetEventRecorderFor("route-prism-preflight"), //nolint:staticcheck // GetEventRecorderFor still required until controller-runtime exposes a 1:1 replacement.
 		preflightOpts,
 	)); err != nil {
 		return fmt.Errorf("register preflight runner: %w", err)
