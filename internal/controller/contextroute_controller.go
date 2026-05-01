@@ -17,7 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -70,7 +70,7 @@ func gammaSupportedServiceType(svc *corev1.Service) bool {
 type ContextRouteReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
-	Recorder record.EventRecorder
+	Recorder events.EventRecorder
 }
 
 // +kubebuilder:rbac:groups=route-prism.egoavara.net,resources=contextroutes,verbs=get;list;watch;create;update;patch;delete
@@ -79,6 +79,7 @@ type ContextRouteReconciler struct {
 // +kubebuilder:rbac:groups=route-prism.egoavara.net,resources=edgetransformations,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch;update
+// +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch;update
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch;create;update;patch;delete
 
 //nolint:gocyclo // Reconcile naturally branches across resource phases.
@@ -370,7 +371,7 @@ func (r *ContextRouteReconciler) event(cr *routeprismv1alpha1.ContextRoute, even
 	if r.Recorder == nil {
 		return
 	}
-	r.Recorder.Eventf(cr, eventtype, reason, fmtStr, args...)
+	r.Recorder.Eventf(cr, nil, eventtype, reason, reason, fmtStr, args...)
 }
 
 // hasAppProtocol returns true if any port on svc has appProtocol set.

@@ -21,7 +21,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
@@ -50,7 +50,7 @@ const rrAdminPollInterval = 15 * time.Second
 type RemoteRouteReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
-	Recorder record.EventRecorder
+	Recorder events.EventRecorder
 
 	// AdminClient is the http.Client used to scrape the Envoy admin
 	// endpoint. Defaults to a 2s-timeout client when nil.
@@ -420,7 +420,7 @@ func (r *RemoteRouteReconciler) event(rr *routeprismv1alpha1.RemoteRoute, eventt
 	if r.Recorder == nil {
 		return
 	}
-	r.Recorder.Eventf(rr, eventtype, reason, fmtStr, args...)
+	r.Recorder.Eventf(rr, nil, eventtype, reason, reason, fmtStr, args...)
 }
 
 func (r *RemoteRouteReconciler) SetupWithManager(mgr ctrl.Manager) error {

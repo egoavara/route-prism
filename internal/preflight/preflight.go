@@ -25,7 +25,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -72,13 +72,13 @@ type Options struct {
 type Runner struct {
 	cfg      *rest.Config
 	scheme   *runtime.Scheme
-	recorder record.EventRecorder
+	recorder events.EventRecorder
 	opts     Options
 }
 
 // New constructs a Runner. The recorder is consulted for events when
 // opts.SelfPod is set.
-func New(cfg *rest.Config, scheme *runtime.Scheme, recorder record.EventRecorder, opts Options) *Runner {
+func New(cfg *rest.Config, scheme *runtime.Scheme, recorder events.EventRecorder, opts Options) *Runner {
 	if opts.Timeout <= 0 {
 		opts.Timeout = defaultProbeTimeout
 	}
@@ -278,7 +278,7 @@ func (r *Runner) report(log logr.Logger, mesh MeshInfo, res probeResult) {
 		if r.recorder == nil || podStub == nil {
 			return
 		}
-		r.recorder.Event(podStub, eventType, reason, msg)
+		r.recorder.Eventf(podStub, nil, eventType, reason, reason, "%s", msg)
 	}
 
 	switch {

@@ -203,14 +203,14 @@ func registerControllers(mgr ctrl.Manager, cfg *config.Config) error {
 	if err := (&controller.ContextRouteReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorderFor("contextroute-controller"), //nolint:staticcheck // GetEventRecorderFor still required until controller-runtime exposes a 1:1 replacement.
+		Recorder: mgr.GetEventRecorder("contextroute-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("setup ContextRoute controller: %w", err)
 	}
 	if err := (&controller.EdgeTransformationReconciler{
 		Client:          mgr.GetClient(),
 		Scheme:          mgr.GetScheme(),
-		Recorder:        mgr.GetEventRecorderFor("edgetransformation-controller"), //nolint:staticcheck // GetEventRecorderFor still required until controller-runtime exposes a 1:1 replacement.
+		Recorder:        mgr.GetEventRecorder("edgetransformation-controller"),
 		OperatorAPIAddr: cfg.API.AdvertisedAddress,
 	}).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("setup EdgeTransformation controller: %w", err)
@@ -218,7 +218,7 @@ func registerControllers(mgr ctrl.Manager, cfg *config.Config) error {
 	if err := (&controller.RemoteRouteReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorderFor("remoteroute-controller"), //nolint:staticcheck // GetEventRecorderFor still required until controller-runtime exposes a 1:1 replacement.
+		Recorder: mgr.GetEventRecorder("remoteroute-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("setup RemoteRoute controller: %w", err)
 	}
@@ -262,7 +262,7 @@ func registerPreflight(mgr ctrl.Manager) error {
 	if err := mgr.Add(preflight.New(
 		mgr.GetConfig(),
 		mgr.GetScheme(),
-		mgr.GetEventRecorderFor("route-prism-preflight"), //nolint:staticcheck // GetEventRecorderFor still required until controller-runtime exposes a 1:1 replacement.
+		mgr.GetEventRecorder("route-prism-preflight"),
 		preflightOpts,
 	)); err != nil {
 		return fmt.Errorf("register preflight runner: %w", err)

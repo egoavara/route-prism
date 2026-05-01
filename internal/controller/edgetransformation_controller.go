@@ -17,7 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
@@ -32,7 +32,7 @@ import (
 type EdgeTransformationReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
-	Recorder record.EventRecorder
+	Recorder events.EventRecorder
 
 	// OperatorAPIAddr is the in-cluster host:port translators reach for
 	// widget assets and proxied /api/v1 calls. Baked into the rendered
@@ -315,7 +315,7 @@ func (r *EdgeTransformationReconciler) event(et *routeprismv1alpha1.EdgeTransfor
 	if r.Recorder == nil {
 		return
 	}
-	r.Recorder.Eventf(et, eventtype, reason, fmtStr, args...)
+	r.Recorder.Eventf(et, nil, eventtype, reason, reason, fmtStr, args...)
 }
 
 func (r *EdgeTransformationReconciler) surfaceHTTPRouteRejection(ctx context.Context, et *routeprismv1alpha1.EdgeTransformation, targetName string) {
