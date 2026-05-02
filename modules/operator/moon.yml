@@ -101,7 +101,10 @@ tasks:
       cache: false
 
   lint:
-    deps: ['setup-tools']
+    deps:
+      - 'setup-tools'
+      - 'web-dashboard:compile'
+      - 'web-widget:compile'
     command: 'bin/golangci-lint run'
     inputs:
       - '**/*.go'
@@ -109,7 +112,10 @@ tasks:
       - '.custom-gcl.yml'
 
   format:
-    deps: ['setup-tools']
+    deps:
+      - 'setup-tools'
+      - 'web-dashboard:compile'
+      - 'web-widget:compile'
     script: 'bin/golangci-lint run --fix || true'
     inputs:
       - '**/*.go'
@@ -118,7 +124,12 @@ tasks:
       cache: false
 
   test:
-    deps: ['manifests', 'generate', 'setup-tools']
+    deps:
+      - 'manifests'
+      - 'generate'
+      - 'setup-tools'
+      - 'web-dashboard:compile'
+      - 'web-widget:compile'
     command: 'bash scripts/run-tests.sh'
     inputs:
       - '**/*.go'
@@ -128,8 +139,12 @@ tasks:
       ENVTEST_K8S_VERSION: '1.34.0'
 
   e2e:
-    deps: ['manifests', 'generate']
-    command: 'go test -tags=e2e ./test/e2e/ -v -ginkgo.v'
+    deps:
+      - 'manifests'
+      - 'generate'
+      - 'web-dashboard:compile'
+      - 'web-widget:compile'
+    script: 'go test -tags=e2e ./test/e2e/ -v -ginkgo.v'
     env:
       KIND_CLUSTER: 'route-prism-test-e2e'
     options:

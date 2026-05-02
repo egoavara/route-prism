@@ -6,14 +6,14 @@ stack: 'frontend'
 
 tasks:
   lint:
-    command: 'biome check .'
+    command: 'pnpm exec biome check .'
     inputs:
       - 'src/**/*'
       - 'index.html'
       - '/biome.json'
 
   format:
-    script: 'biome check --write . || true'
+    script: 'pnpm exec biome check --write . || true'
     inputs:
       - 'src/**/*'
       - 'index.html'
