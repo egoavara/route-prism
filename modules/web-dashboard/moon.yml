@@ -14,7 +14,7 @@ tasks:
       - '/biome.json'
 
   format:
-    script: 'pnpm exec biome check --write . || true'
+    script: 'pnpm exec biome check --write --unsafe . || true'
     inputs:
       - 'src/**/*'
       - 'index.html'

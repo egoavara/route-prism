@@ -2,15 +2,16 @@ import {
   Check,
   ChevronDown,
   ChevronUp,
-  CornerDownLeft,
-  Copy,
   Cookie,
+  Copy,
+  CornerDownLeft,
   GitBranch,
   Laptop,
   Trash2,
   X,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { listAlternatives, listServices, type ServiceItem } from '@/api'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -18,7 +19,6 @@ import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { listAlternatives, listServices, type ServiceItem } from '@/api'
 
 const PAGE_SIZE = 100
 const SELF_ALTERNATIVE = '.'
@@ -594,8 +594,7 @@ interface RemoteBadgeProps {
 // RemoteBadge surfaces the RemoteRoute reachability as a tiny pill.
 // Tristate: online (green), offline (red), unknown (grey).
 function RemoteBadge({ reachable }: RemoteBadgeProps) {
-  const state =
-    reachable === true ? 'online' : reachable === false ? 'offline' : 'unknown'
+  const state = reachable === true ? 'online' : reachable === false ? 'offline' : 'unknown'
   const cls =
     state === 'online'
       ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
@@ -615,7 +614,7 @@ function RemoteBadge({ reachable }: RemoteBadgeProps) {
         cls
       }
     >
-      <span className={'h-1.5 w-1.5 rounded-full ' + dot} aria-hidden />
+      <span className={`h-1.5 w-1.5 rounded-full ${dot}`} aria-hidden />
       {state === 'offline' ? 'offline' : 'remote'}
     </span>
   )
@@ -702,7 +701,7 @@ function FloatingSelection({ cart, onRemove, onClear }: FloatingSelectionProps) 
                 onClear()
               }}
               disabled={isEmpty}
-              className={'h-7 gap-1 px-2 text-xs ' + (isEmpty ? 'invisible' : '')}
+              className={`h-7 gap-1 px-2 text-xs ${isEmpty ? 'invisible' : ''}`}
               tabIndex={isEmpty ? -1 : 0}
             >
               <Trash2 className="h-3.5 w-3.5" />

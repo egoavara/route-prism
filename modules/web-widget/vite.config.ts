@@ -20,7 +20,7 @@ export default defineConfig({
         name: 'RoutePrismWidget',
         entryFileNames: 'widget.js',
         assetFileNames: (info) => {
-          if (info.name && info.name.endsWith('.css')) return 'widget.css'
+          if (info.name?.endsWith('.css')) return 'widget.css'
           return 'assets/[name]-[hash][extname]'
         },
         inlineDynamicImports: true,

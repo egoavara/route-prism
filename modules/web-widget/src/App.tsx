@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import createFuzzySearch from '@nozbe/microfuzz'
-import type { TupleEntry, WidgetConfig } from './types'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { listTuples } from './api'
-import { parse, readCookie, setEntry } from './cookieStore'
-import { formatChord, useHotkey } from './useHotkey'
 import { TupleList, type TupleRow } from './components/TupleList'
+import { parse, readCookie, setEntry } from './cookieStore'
+import type { TupleEntry, WidgetConfig } from './types'
+import { formatChord, useHotkey } from './useHotkey'
 
 interface Props {
   config: WidgetConfig
@@ -271,11 +271,7 @@ export function App({ config }: Props) {
   void ownVariant
 
   return (
-    <div
-      ref={rootRef}
-      class={`rp-root rp-mode-${mode} rp-anchor-${anchor}`}
-      style={hostStyle}
-    >
+    <div ref={rootRef} class={`rp-root rp-mode-${mode} rp-anchor-${anchor}`} style={hostStyle}>
       {open && (
         <div class="rp-panel">
           <div class="rp-header">
@@ -307,11 +303,7 @@ export function App({ config }: Props) {
         </div>
       )}
       {mode === 'sidebar' ? (
-        <button
-          class={`rp-tab ${stateClass}`}
-          onClick={handleOpen}
-          title={buttonTitle}
-        >
+        <button class={`rp-tab ${stateClass}`} onClick={handleOpen} title={buttonTitle}>
           {/* Same cycling label as the floating button, just rotated
              with the sidebar's vertical writing-mode. Re-mounted on
              every label change (key={buttonLabel}) so rp-tab-label-in
@@ -321,11 +313,7 @@ export function App({ config }: Props) {
           </span>
         </button>
       ) : (
-        <button
-          class={`rp-button ${stateClass}`}
-          onClick={handleOpen}
-          title={buttonTitle}
-        >
+        <button class={`rp-button ${stateClass}`} onClick={handleOpen} title={buttonTitle}>
           <span class="rp-dot" />
           {/* key={buttonLabel} re-mounts the span on every change so the
              rp-label-in keyframe replays — gives the rotation a soft
