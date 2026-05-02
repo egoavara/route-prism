@@ -178,7 +178,7 @@ k8s_resource(
 #                                              → web → api → db (RemoteRoute) → host:18083
 k8s_yaml("modules/operator/test/devloop/sample.yaml")
 
-DEMO_TIERS = ["web", "modules/operator/api", "db"]
+DEMO_TIERS = ["web", "api", "db"]
 for tier in DEMO_TIERS:
     k8s_resource(
         workload = tier,
