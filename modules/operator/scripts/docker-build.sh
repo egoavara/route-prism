@@ -15,5 +15,7 @@ ls -la internal/dashboard/dist/ internal/widget/dist/ 2>&1 | head -10
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/manager ./cmd
 ls -la bin/manager
 
-docker build -t "$IMG" -f Dockerfile .
-docker image inspect "$IMG" --format 'Built {{.Id}} tags={{.RepoTags}}'
+DOCKER_BUILDKIT=0 docker build -t "$IMG" -f Dockerfile .
+echo "[docker-build] images list:"
+docker images "$IMG"
+docker image inspect "$IMG" --format 'OK: id={{.Id}} tags={{.RepoTags}}'
