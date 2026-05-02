@@ -3,19 +3,19 @@
 # service-mesh platform: Cilium or Istio (ambient).
 #
 # Usage:
-#   ./hack/kind-up.sh                            # defaults to cilium
-#   ./hack/kind-up.sh --platform cilium          # Cilium provides CNI + GAMMA
-#   ./hack/kind-up.sh --platform istio           # kindnet CNI + Istio ambient GAMMA
-#   ./hack/kind-up.sh --platform cilium-istio    # Cilium CNI (chained) + Istio ambient
+#   ./scripts/kind-up.sh                            # defaults to cilium
+#   ./scripts/kind-up.sh --platform cilium          # Cilium provides CNI + GAMMA
+#   ./scripts/kind-up.sh --platform istio           # kindnet CNI + Istio ambient GAMMA
+#   ./scripts/kind-up.sh --platform cilium-istio    # Cilium CNI (chained) + Istio ambient
 #                                                # (Cilium installed with cni.exclusive=false
 #                                                # and gatewayAPI off so Istio is the sole
 #                                                # GAMMA enforcer)
-#   PLATFORM=cilium-istio ./hack/kind-up.sh
+#   PLATFORM=cilium-istio ./scripts/kind-up.sh
 #
 # Idempotent: if the cluster already exists with the chosen mesh running,
 # this exits successfully without touching anything. If the cluster exists
 # but the mesh is missing OR a *different* mesh is installed, it errors out
-# — recreate via ./hack/kind-down.sh && ./hack/kind-up.sh --platform <p>.
+# — recreate via ./scripts/kind-down.sh && ./scripts/kind-up.sh --platform <p>.
 set -euo pipefail
 
 PLATFORM="${PLATFORM:-cilium}"
@@ -149,7 +149,7 @@ download_kind
 #                   short-circuits Service→Pod translation and bypasses
 #                   ztunnel/waypoint).
 KIND_CONFIG_BASENAME=kind-config-${PLATFORM}.yaml
-KIND_CONFIG="${REPO_ROOT}/hack/${KIND_CONFIG_BASENAME}"
+KIND_CONFIG="${REPO_ROOT}/scripts/${KIND_CONFIG_BASENAME}"
 if [[ ! -f "${KIND_CONFIG}" ]]; then
     echo "ERROR: missing ${KIND_CONFIG}" >&2; exit 1
 fi
@@ -193,8 +193,8 @@ if [[ "${conflict}" == "1" ]]; then
 ERROR: kind cluster '${CLUSTER}' is already running a different mesh layout than --platform=${PLATFORM}.
        Detected: cilium=${HAS_CILIUM}, istio=${HAS_ISTIO}
 Recreate it:
-    ./hack/kind-down.sh
-    ./hack/kind-up.sh --platform ${PLATFORM}
+    ./scripts/kind-down.sh
+    ./scripts/kind-up.sh --platform ${PLATFORM}
 EOF
     exit 1
 fi
@@ -242,8 +242,8 @@ install_cilium() {
             cat >&2 <<EOF
 ERROR: kind cluster '${CLUSTER}' exists but has no Cilium DaemonSet.
 Recreate it:
-    ./hack/kind-down.sh
-    ./hack/kind-up.sh --platform ${PLATFORM}
+    ./scripts/kind-down.sh
+    ./scripts/kind-up.sh --platform ${PLATFORM}
 EOF
             exit 1
         fi
@@ -313,8 +313,8 @@ install_istio() {
             cat >&2 <<EOF
 ERROR: kind cluster '${CLUSTER}' exists but has no istiod Deployment.
 Recreate it:
-    ./hack/kind-down.sh
-    ./hack/kind-up.sh --platform istio
+    ./scripts/kind-down.sh
+    ./scripts/kind-up.sh --platform istio
 EOF
             exit 1
         fi
@@ -375,6 +375,6 @@ kind cluster '${CLUSTER}' is ready.
   Gateway API: ${GATEWAY_API_VERSION}
 
 Next:
-    ./hack/tilt-up.sh
+    ./tilt-up.sh
 ================================================================
 EOF

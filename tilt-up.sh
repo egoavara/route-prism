@@ -1,22 +1,24 @@
 #!/usr/bin/env bash
 # Launch Tilt against the route-prism kind cluster.
 #
-# Prerequisites: run `./hack/kind-up.sh` first to create the cluster + Cilium.
-# This wrapper only sets the project-local KUBECONFIG and PATH, then execs Tilt.
+# Prerequisites: run `./scripts/kind-up.sh` first to create the cluster +
+# mesh (Cilium / Istio / cilium-istio). This wrapper sets the project-
+# local KUBECONFIG and PATH, verifies cluster state, then execs Tilt from
+# the repo root (where Tiltfile lives).
 #
-# Usage: ./hack/tilt-up.sh [extra tilt args...]
+# Usage: ./tilt-up.sh [extra tilt args...]
 set -euo pipefail
 
 CLUSTER="${CLUSTER:-route-prism}"
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${REPO_ROOT}"
 KIND="${REPO_ROOT}/bin/kind"
 export KUBECONFIG="${REPO_ROOT}/bin/.kubeconfig"
 export PATH="${REPO_ROOT}/bin:${PATH}"
 
 if [[ ! -x "${KIND}" ]]; then
-    echo "ERROR: ${KIND} not found. Run ./hack/kind-up.sh first." >&2
+    echo "ERROR: ${KIND} not found. Run ./scripts/kind-up.sh first." >&2
     exit 1
 fi
 
@@ -25,7 +27,7 @@ if ! "${KIND}" get clusters 2>/dev/null | grep -qx "${CLUSTER}"; then
 ERROR: kind cluster '${CLUSTER}' does not exist.
 
 Create it first:
-    ./hack/kind-up.sh
+    ./scripts/kind-up.sh
 EOF
     exit 1
 fi

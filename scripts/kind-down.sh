@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# Tear down the kind cluster created by ./hack/kind-up.sh.
+# Tear down the kind cluster created by ./scripts/kind-up.sh.
 # Leaves ./bin/kind, ./bin/cilium binaries in place so the next kind-up.sh
 # is fast.
 #
-# Usage: ./hack/kind-down.sh
+# Usage: ./scripts/kind-down.sh
 set -euo pipefail
 
 CLUSTER="${CLUSTER:-route-prism}"
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "${REPO_ROOT}"
-KIND="${REPO_ROOT}/bin/kind"
-KUBECONFIG_FILE="${KUBECONFIG:-${REPO_ROOT}/bin/.kubeconfig}"
+OPERATOR_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "${OPERATOR_DIR}"
+KIND="${OPERATOR_DIR}/bin/kind"
+KUBECONFIG_FILE="${KUBECONFIG:-${OPERATOR_DIR}/bin/.kubeconfig}"
 
 if [[ ! -x "${KIND}" ]]; then
     echo "kind binary not found at ${KIND}; nothing to do." >&2
