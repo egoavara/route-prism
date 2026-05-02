@@ -6,7 +6,7 @@ cd "$(dirname "$0")/.."
 
 LOCALBIN="$(pwd)/bin"
 KUSTOMIZE="$LOCALBIN/kustomize"
-IMG="${IMG:-${1:-controller:latest}}"
+IMG="${1:-${IMG:-controller:latest}}"
 
 if [ ! -x "$KUSTOMIZE" ]; then
   bash scripts/install-tools.sh
