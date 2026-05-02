@@ -1,18 +1,23 @@
 # -*- mode: Python -*-
 # Tiltfile for route-prism local dev loop.
 #
+# Strict separation:
+#   moon = source-code transformation (compile, generate, lint, format,
+#          tests). Everything that produces a file or runs a Go test goes
+#          through `moon run …`. Tilt only invokes moon, never the
+#          underlying tools (go, pnpm, vite, controller-gen, …) directly.
+#   Tilt = dev-environment runtime: cluster verification, image load,
+#          kustomize apply, demo workload YAMLs, port-forwarding, manual
+#          buttons, background sweepers.
+#
 # Setup steps the user runs MANUALLY (this Tiltfile does not bootstrap them):
 #   1. ./scripts/kind-up.sh [--platform cilium|istio]
 #                              — create kind cluster + install chosen mesh
 #                                + Gateway API CRDs (cilium is the default)
-#   2. ./tilt-up.sh        — launch Tilt with project-local KUBECONFIG
+#   2. ./tilt-up.sh             — launch Tilt with project-local KUBECONFIG
 #
 # Teardown:
-#   ./scripts/kind-down.sh         — delete the kind cluster
-#
-# The wrapper script sets KUBECONFIG=$(pwd)/bin/.kubeconfig before exec'ing
-# tilt, so this Tiltfile only needs to verify Tilt landed on the right
-# context, then proceed to deploy.
+#   ./scripts/kind-down.sh      — delete the kind cluster
 
 CLUSTER = "route-prism"
 KIND_CONTEXT = "kind-" + CLUSTER
@@ -58,62 +63,79 @@ else:
     fail("No GatewayClass 'cilium' or 'istio' found. Run ./scripts/kind-up.sh [--platform cilium|istio].")
 print("→ detected mesh platform: %s" % PLATFORM)
 
-# 1) Compile the manager + sample-tier binaries on the host. Done
-#    synchronously at Tiltfile load so docker_build calls below always find
-#    the binaries on disk; resource_deps only orders deploy, not image
-#    build. (sample-tier is the tiny HTTP forwarder used by the 3-tier
-#    devloop sample to chain web→api→db.)
-print("→ initial dashboard build → modules/operator/internal/dashboard/dist ...")
-local("cd modules/web-dashboard && pnpm install --prefer-offline && pnpm build", echo_off = False)
-print("→ initial widget build → modules/operator/internal/widget/dist ...")
-local("cd modules/web-widget && pnpm install --prefer-offline && pnpm build", echo_off = False)
-print("→ initial Go build → bin/manager-linux, bin/sample-tier-linux ...")
-local("CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -C modules/operator -o ../../bin/manager-linux ./cmd",
-      echo_off = False)
-local("CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -C modules/operator -o ../../bin/sample-tier-linux ./cmd/sample-tier",
-      echo_off = False)
+# ──────────────────────────────────────────────────────────────────────
+# 1) Initial sync build via moon. moon's task graph chains
+#    web-dashboard:compile + web-widget:compile + manifests + generate
+#    before producing modules/operator/bin/manager. Done at Tiltfile load
+#    so docker_build calls below find the binaries on disk.
+print("→ initial moon build (web bundles + operator binaries) ...")
+local("moon run operator:compile operator:compile-sample-tier", echo_off = False)
 
-# Watch the web sources and rebuild the embedded dashboard. The output
-# lands in modules/operator/internal/dashboard/dist, which the manager-compile resource
-# already watches via its `internal` dep, so a frontend edit chains
-# through to a new manager binary automatically.
+# ──────────────────────────────────────────────────────────────────────
+# 2) Compile resources — every command is a thin shim around `moon run`.
+#    Tilt watches files via `deps`; on change, it fires `moon run :compile`
+#    which uses moon's content-hash cache to skip work when nothing changed.
+
 local_resource(
     "dashboard-compile",
-    cmd = "cd modules/web-dashboard && pnpm build",
-    deps = ["modules/web-dashboard/src", "modules/web-dashboard/index.html", "modules/web-dashboard/vite.config.ts", "modules/web-dashboard/package.json"],
-    ignore = ["modules/web-dashboard/node_modules", "modules/web-dashboard/dist", "modules/web-widget"],
+    cmd = "moon run web-dashboard:compile",
+    deps = [
+        "modules/web-dashboard/src",
+        "modules/web-dashboard/index.html",
+        "modules/web-dashboard/vite.config.ts",
+        "modules/web-dashboard/package.json",
+    ],
+    ignore = [
+        "modules/web-dashboard/node_modules",
+        "modules/web-dashboard/dist",
+    ],
     labels = ["dev"],
 )
 
-# Watch widget sources and rebuild the embedded widget bundle. Output lands
-# in modules/operator/internal/widget/dist, which manager-compile picks up via its `internal`
-# dep so a widget edit chains to a fresh manager binary.
 local_resource(
     "widget-compile",
-    cmd = "cd modules/web-widget && pnpm build",
-    deps = ["modules/web-widget/src", "modules/web-widget/index.html", "modules/web-widget/vite.config.ts", "modules/web-widget/package.json"],
+    cmd = "moon run web-widget:compile",
+    deps = [
+        "modules/web-widget/src",
+        "modules/web-widget/index.html",
+        "modules/web-widget/vite.config.ts",
+        "modules/web-widget/package.json",
+    ],
     ignore = ["modules/web-widget/node_modules"],
     labels = ["dev"],
 )
 
-# Watch Go sources for incremental rebuilds. When these fire, the
-# corresponding binary changes and docker_build (which watches it via
-# `only=`) reruns; the affected Pod is replaced.
+# manager-compile delegates to moon, which itself depends on
+# dashboard-compile + widget-compile + manifests + generate. We still
+# declare resource_deps so the Tilt UI shows the chain and re-running this
+# resource triggers upstream watchers.
 local_resource(
     "manager-compile",
-    cmd = "CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -C modules/operator -o ../../bin/manager-linux ./cmd",
-    deps = ["modules/operator/cmd/main.go", "modules/operator/api", "modules/operator/internal", "modules/operator/go.mod", "modules/operator/go.sum"],
+    cmd = "moon run operator:compile",
+    deps = [
+        "modules/operator/cmd/main.go",
+        "modules/operator/api",
+        "modules/operator/internal",
+        "modules/operator/go.mod",
+        "modules/operator/go.sum",
+    ],
     resource_deps = ["dashboard-compile", "widget-compile"],
     labels = ["dev"],
 )
+
 local_resource(
     "sample-tier-compile",
-    cmd = "CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -C modules/operator -o ../../bin/sample-tier-linux ./cmd/sample-tier",
-    deps = ["modules/operator/cmd/sample-tier", "modules/operator/go.mod", "modules/operator/go.sum"],
+    cmd = "moon run operator:compile-sample-tier",
+    deps = [
+        "modules/operator/cmd/sample-tier",
+        "modules/operator/go.mod",
+        "modules/operator/go.sum",
+    ],
     labels = ["dev"],
 )
 
-# 2) Build the images. Tilt loads them into kind automatically because the
+# ──────────────────────────────────────────────────────────────────────
+# 3) Build images. Tilt loads them into kind automatically because the
 #    context is kind-* and we use docker_build (Tilt detects kind and uses
 #    `kind load docker-image`).
 docker_build(
@@ -122,11 +144,11 @@ docker_build(
     dockerfile_contents = """
 FROM gcr.io/distroless/static:nonroot
 WORKDIR /
-COPY bin/manager-linux /manager
+COPY modules/operator/bin/manager /manager
 USER 65532:65532
 ENTRYPOINT ["/manager"]
 """,
-    only = ["bin/manager-linux"],
+    only = ["modules/operator/bin/manager"],
 )
 docker_build(
     "route-prism-sample-tier",         # referenced by test/devloop/sample.yaml
@@ -134,17 +156,18 @@ docker_build(
     dockerfile_contents = """
 FROM gcr.io/distroless/static:nonroot
 WORKDIR /
-COPY bin/sample-tier-linux /sample-tier
+COPY modules/operator/bin/sample-tier /sample-tier
 USER 65532:65532
 ENTRYPOINT ["/sample-tier"]
 """,
-    only = ["bin/sample-tier-linux"],
+    only = ["modules/operator/bin/sample-tier"],
 )
 
-# 3) Apply the kustomize manifests (CRDs, RBAC, manager Deployment, etc.).
+# ──────────────────────────────────────────────────────────────────────
+# 4) Apply the kustomize manifests (CRDs, RBAC, manager Deployment, etc.).
 k8s_yaml(kustomize("modules/operator/config/default"))
 
-# 4) Group the controller resources for the Tilt UI.
+# 5) Group the controller resources for the Tilt UI.
 k8s_resource(
     workload = "route-prism-controller-manager",
     new_name = "controller",
@@ -155,12 +178,9 @@ k8s_resource(
     port_forwards = ["8082:8082"],
 )
 
-# 5) Apply demo workloads + sample CRs. The sample is a 3-tier topology
-#    (web → api → db); each tier has stable + canary, a ContextRoute, and
-#    a router-mode EdgeTransformation so cookie-based variant selection
-#    works at every hop. Tilt auto-groups Deployments-as-workloads and
-#    pulls matching Services into them; the ungrouped objects (Namespace
-#    + CRs) need explicit assignment.
+# ──────────────────────────────────────────────────────────────────────
+# 6) Demo workloads + sample CRs. These YAMLs are dev-environment
+#    configuration (not source code), so Tilt owns them directly.
 #
 # Demo entry points (no Tilt port-forward — the kind cluster publishes
 # NodePort 30080/30081/30083 on host-ports 8080/8081/8083 via
@@ -220,7 +240,7 @@ k8s_resource(
 )
 
 # ──────────────────────────────────────────────────────────────────────
-# 6) RemoteRoute demo: divert demo.db traffic to a sample-tier process
+# 7) RemoteRoute demo: divert demo.db traffic to a sample-tier process
 #    running on the developer's host machine.
 #
 # Topology:
@@ -265,14 +285,17 @@ echo "${ip:-172.18.0.1}"
 REMOTE_TIER_PORT = 18083
 print("→ kind→host gateway: %s (sample-tier listens on %d)" % (HOST_IP, REMOTE_TIER_PORT))
 
-# Compile a host-native sample-tier so it actually runs on the developer's
-# OS. Distinct from sample-tier-linux which is baked into the in-cluster
-# image; on Linux/WSL these end up identical, on macOS/Windows they
-# differ.
+# Host-native sample-tier compile via moon (distinct from compile-sample-tier
+# which is GOOS=linux for in-cluster image; this one runs directly on the
+# developer's OS).
 local_resource(
     "remote-tier-compile",
-    cmd = "go build -C modules/operator -o ../../bin/sample-tier-host ./cmd/sample-tier",
-    deps = ["modules/operator/cmd/sample-tier", "modules/operator/go.mod", "modules/operator/go.sum"],
+    cmd = "moon run operator:compile-sample-tier-host",
+    deps = [
+        "modules/operator/cmd/sample-tier",
+        "modules/operator/go.mod",
+        "modules/operator/go.sum",
+    ],
     labels = ["remote"],
 )
 
@@ -282,8 +305,8 @@ local_resource(
 # 5xx (since this RR has no fallback in-cluster variant).
 local_resource(
     "remote-tier",
-    serve_cmd = "PORT=%d TIER=db VARIANT=db-laptop bin/sample-tier-host" % REMOTE_TIER_PORT,
-    deps = ["bin/sample-tier-host"],
+    serve_cmd = "PORT=%d TIER=db VARIANT=db-laptop modules/operator/bin/sample-tier-host" % REMOTE_TIER_PORT,
+    deps = ["modules/operator/bin/sample-tier-host"],
     resource_deps = ["remote-tier-compile"],
     labels = ["remote"],
     readiness_probe = probe(
@@ -331,17 +354,16 @@ k8s_resource(
 #   kubectl -n demo get pods,svc,cm -l route-prism.egoavara.net/owner=db-laptop
 #   kubectl -n demo describe remoteroute db-laptop
 
-# Both buttons run the same Ginkgo binary under test/e2e/, filtered by
-# label. -count=1 disables the test cache so re-clicks always re-run.
-# KUBECONFIG is inherited (Tilt sets it via tilt-up.sh) so the typed
-# client-go reaches the kind cluster.
+# ──────────────────────────────────────────────────────────────────────
+# 8) Manual test buttons. All test execution routes through moon for
+#    parity with CI (`moon run operator:test`, `moon run operator:e2e`).
 
 # One-click smoke check against the devloop sample (demo namespace).
 # Exercises 4 scenarios (mesh/translator × no-cookie/with-cookie); every
 # spec prints request / expected variant / observed pod.
 local_resource(
     "check",
-    cmd = "go test -C modules/operator -tags routing -timeout 5m -v -count=1 ./test/e2e/ -ginkgo.label-filter=check -ginkgo.no-color=false",
+    cmd = "moon run operator:check",
     auto_init = False,
     trigger_mode = TRIGGER_MODE_MANUAL,
     resource_deps = ["controller", "demo-objects"],
@@ -363,44 +385,40 @@ local_resource(
 #   e2e-istio         — only istio
 #   e2e-cilium-istio  — only the chained combo
 #
-# Single-platform buttons reuse the same orchestrator binary; pre-flight
-# (image build / manifests / prefetch / compile) is the same regardless of
-# how many platforms are selected, so re-running with the same image tag
-# is fast (Docker / Go caches).
-#
 # CLI escape hatches for narrow runs:
-#   go -C modules/operator run ./cmd/e2e-matrix --groups=g1 --platforms=cilium-istio --keep
-#   go -C modules/operator run ./cmd/e2e-matrix --skip-build           # reuse last image
+#   moon run operator:e2e-matrix -- --groups=g1 --platforms=cilium-istio --keep
+#   moon run operator:e2e-matrix -- --skip-build
 local_resource(
     "e2e-matrix",
-    cmd = "go -C modules/operator run ./cmd/e2e-matrix",
+    cmd = "moon run operator:e2e-matrix",
     auto_init = False,
     trigger_mode = TRIGGER_MODE_MANUAL,
     labels = ["e2e"],
 )
 local_resource(
     "e2e-cilium",
-    cmd = "go -C modules/operator run ./cmd/e2e-matrix --platforms=cilium",
+    cmd = "moon run operator:e2e-matrix -- --platforms=cilium",
     auto_init = False,
     trigger_mode = TRIGGER_MODE_MANUAL,
     labels = ["e2e"],
 )
 local_resource(
     "e2e-istio",
-    cmd = "go -C modules/operator run ./cmd/e2e-matrix --platforms=istio",
+    cmd = "moon run operator:e2e-matrix -- --platforms=istio",
     auto_init = False,
     trigger_mode = TRIGGER_MODE_MANUAL,
     labels = ["e2e"],
 )
 local_resource(
     "e2e-cilium-istio",
-    cmd = "go -C modules/operator run ./cmd/e2e-matrix --platforms=cilium-istio",
+    cmd = "moon run operator:e2e-matrix -- --platforms=cilium-istio",
     auto_init = False,
     trigger_mode = TRIGGER_MODE_MANUAL,
     labels = ["e2e"],
 )
 
-# Background sweeper: periodically prune dangling container images that
+# ──────────────────────────────────────────────────────────────────────
+# 9) Background sweeper: periodically prune dangling container images that
 # accumulate as Tilt rebuilds `controller` / `route-prism-sample-tier` and
 # re-runs `kind load docker-image`. Each load tags the new image with the
 # same name and leaves the previous SHA dangling — both on the host Docker

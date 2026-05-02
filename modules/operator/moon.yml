@@ -80,6 +80,17 @@ tasks:
     outputs:
       - 'bin/sample-tier'
 
+  # Host-native sample-tier binary used by the RemoteRoute demo (Tilt's
+  # remote-tier resource runs it directly on the developer's machine).
+  compile-sample-tier-host:
+    command: 'go build -o bin/sample-tier-host ./cmd/sample-tier'
+    inputs:
+      - 'cmd/sample-tier/**/*.go'
+      - 'go.mod'
+      - 'go.sum'
+    outputs:
+      - 'bin/sample-tier-host'
+
   build:
     deps: ['compile']
     command: 'docker build -t $IMG .'
@@ -147,6 +158,23 @@ tasks:
     script: 'go test -tags=e2e ./test/e2e/ -v -ginkgo.v'
     env:
       KIND_CLUSTER: 'route-prism-test-e2e'
+    options:
+      cache: false
+
+  # Routing-label e2e smoke check used by Tilt's 'check' button.
+  # Re-runs against the live dev cluster, so caching disabled.
+  check:
+    deps:
+      - 'manifests'
+      - 'generate'
+    script: 'go test -tags routing -timeout 5m -v -count=1 ./test/e2e/ -ginkgo.label-filter=check -ginkgo.no-color=false'
+    options:
+      cache: false
+
+  # Cross-platform e2e matrix orchestrator. Pass platform args after `--`,
+  # e.g. `moon run operator:e2e-matrix -- --platforms=cilium`.
+  e2e-matrix:
+    script: 'go run ./cmd/e2e-matrix'
     options:
       cache: false
 
