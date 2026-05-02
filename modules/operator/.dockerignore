@@ -1,4 +1,8 @@
-# Dockerfile is COPY-only; only the prebuilt binary needs to be in context.
+# Dockerfiles in this dir are COPY-only:
+#   - Dockerfile             COPY bin/manager
+#   - Dockerfile.sample-tier COPY bin/sample-tier
+#   - Dockerfile.release     COPY dist/manager_${TARGETOS}_${TARGETARCH}
+# Allow only those staging dirs into the build context.
 *
-!bin/manager
-!bin/sample-tier
+!bin/
+!dist/
