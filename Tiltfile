@@ -68,9 +68,9 @@ local("cd modules/web-dashboard && pnpm install --prefer-offline && pnpm build",
 print("→ initial widget build → modules/operator/internal/widget/dist ...")
 local("cd modules/web-widget && pnpm install --prefer-offline && pnpm build", echo_off = False)
 print("→ initial Go build → bin/manager-linux, bin/sample-tier-linux ...")
-local("CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/manager-linux modules/operator/cmd/main.go",
+local("CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -C modules/operator -o ../../bin/manager-linux ./cmd",
       echo_off = False)
-local("CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/sample-tier-linux ./modules/operator/cmd/sample-tier",
+local("CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -C modules/operator -o ../../bin/sample-tier-linux ./cmd/sample-tier",
       echo_off = False)
 
 # Watch the web sources and rebuild the embedded dashboard. The output
@@ -101,14 +101,14 @@ local_resource(
 # `only=`) reruns; the affected Pod is replaced.
 local_resource(
     "manager-compile",
-    cmd = "CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/manager-linux modules/operator/cmd/main.go",
+    cmd = "CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -C modules/operator -o ../../bin/manager-linux ./cmd",
     deps = ["modules/operator/cmd/main.go", "modules/operator/api", "modules/operator/internal", "modules/operator/go.mod", "modules/operator/go.sum"],
     resource_deps = ["dashboard-compile", "widget-compile"],
     labels = ["dev"],
 )
 local_resource(
     "sample-tier-compile",
-    cmd = "CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/sample-tier-linux ./modules/operator/cmd/sample-tier",
+    cmd = "CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -C modules/operator -o ../../bin/sample-tier-linux ./cmd/sample-tier",
     deps = ["modules/operator/cmd/sample-tier", "modules/operator/go.mod", "modules/operator/go.sum"],
     labels = ["dev"],
 )
@@ -271,7 +271,7 @@ print("→ kind→host gateway: %s (sample-tier listens on %d)" % (HOST_IP, REMO
 # differ.
 local_resource(
     "remote-tier-compile",
-    cmd = "go build -o bin/sample-tier-host ./modules/operator/cmd/sample-tier",
+    cmd = "go build -C modules/operator -o ../../bin/sample-tier-host ./cmd/sample-tier",
     deps = ["modules/operator/cmd/sample-tier", "modules/operator/go.mod", "modules/operator/go.sum"],
     labels = ["remote"],
 )
@@ -341,7 +341,7 @@ k8s_resource(
 # spec prints request / expected variant / observed pod.
 local_resource(
     "check",
-    cmd = "go test -tags routing -timeout 5m -v -count=1 ./modules/operator/test/e2e/ -ginkgo.label-filter=check -ginkgo.no-color=false",
+    cmd = "go test -C modules/operator -tags routing -timeout 5m -v -count=1 ./test/e2e/ -ginkgo.label-filter=check -ginkgo.no-color=false",
     auto_init = False,
     trigger_mode = TRIGGER_MODE_MANUAL,
     resource_deps = ["controller", "demo-objects"],
@@ -369,32 +369,32 @@ local_resource(
 # is fast (Docker / Go caches).
 #
 # CLI escape hatches for narrow runs:
-#   go run ./modules/operator/cmd/e2e-matrix --groups=g1 --platforms=cilium-istio --keep
-#   go run ./modules/operator/cmd/e2e-matrix --skip-build           # reuse last image
+#   go -C modules/operator run ./cmd/e2e-matrix --groups=g1 --platforms=cilium-istio --keep
+#   go -C modules/operator run ./cmd/e2e-matrix --skip-build           # reuse last image
 local_resource(
     "e2e-matrix",
-    cmd = "go run ./modules/operator/cmd/e2e-matrix",
+    cmd = "go -C modules/operator run ./cmd/e2e-matrix",
     auto_init = False,
     trigger_mode = TRIGGER_MODE_MANUAL,
     labels = ["e2e"],
 )
 local_resource(
     "e2e-cilium",
-    cmd = "go run ./modules/operator/cmd/e2e-matrix --platforms=cilium",
+    cmd = "go -C modules/operator run ./cmd/e2e-matrix --platforms=cilium",
     auto_init = False,
     trigger_mode = TRIGGER_MODE_MANUAL,
     labels = ["e2e"],
 )
 local_resource(
     "e2e-istio",
-    cmd = "go run ./modules/operator/cmd/e2e-matrix --platforms=istio",
+    cmd = "go -C modules/operator run ./cmd/e2e-matrix --platforms=istio",
     auto_init = False,
     trigger_mode = TRIGGER_MODE_MANUAL,
     labels = ["e2e"],
 )
 local_resource(
     "e2e-cilium-istio",
-    cmd = "go run ./modules/operator/cmd/e2e-matrix --platforms=cilium-istio",
+    cmd = "go -C modules/operator run ./cmd/e2e-matrix --platforms=cilium-istio",
     auto_init = False,
     trigger_mode = TRIGGER_MODE_MANUAL,
     labels = ["e2e"],
