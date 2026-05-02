@@ -5,8 +5,6 @@ on:
   pull_request:
 
 env:
-  # Force JS-based actions (checkout, setup-go, etc.) to run on Node.js 24
-  # instead of the deprecated Node.js 20 runtime.
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
 jobs:
@@ -14,13 +12,11 @@ jobs:
     name: Run on Ubuntu
     runs-on: ubuntu-latest
     steps:
-      - name: Clone the code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
+      - uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          go-version-file: modules/operator/go.mod
 
       - uses: pnpm/action-setup@v4
         with:
@@ -32,15 +28,25 @@ jobs:
           node-version: '24'
           cache: 'pnpm'
           cache-dependency-path: |
-            web/pnpm-lock.yaml
-            web/widget/pnpm-lock.yaml
+            modules/web-dashboard/pnpm-lock.yaml
+            modules/web-widget/pnpm-lock.yaml
 
-      - name: Build dashboard + widget bundles
-        run: |
-          (cd web && pnpm install --frozen-lockfile && pnpm build)
-          (cd web/widget && pnpm install --frozen-lockfile && pnpm build)
+      - name: Install pnpm workspace deps
+        run: pnpm install --frozen-lockfile
 
-      - name: Running Tests
-        run: |
-          go mod tidy
-          make test
+      - name: Restore moon + operator tool cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            .moon/cache
+            modules/operator/bin
+          key: moon-${{ runner.os }}-${{ hashFiles('.moon/toolchain.yml', 'modules/operator/go.sum', 'pnpm-lock.yaml', 'modules/operator/scripts/install-tools.sh', 'modules/operator/moon.yml') }}
+          restore-keys: |
+            moon-${{ runner.os }}-
+
+      - uses: moonrepo/setup-toolchain@v0
+        with:
+          auto-install: true
+
+      - name: Run unit tests
+        run: moon run operator:test

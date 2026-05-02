@@ -1,0 +1,10 @@
+$schema: 'https://moonrepo.dev/schemas/toolchain.json'
+
+# Node + pnpm pinned to versions used during the migration. Bump as needed.
+node:
+  version: '24.10.0'
+  packageManager: 'pnpm'
+  pnpm:
+    version: '9.15.4'
+
+# Go is expected on PATH (system or via proto/asdf). Pinned via go.mod.

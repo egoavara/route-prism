@@ -1,0 +1,4 @@
+# Dockerfile is COPY-only; only the prebuilt binary needs to be in context.
+*
+!bin/manager
+!bin/sample-tier

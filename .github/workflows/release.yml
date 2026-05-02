@@ -16,17 +16,15 @@ on:
         default: true
 
 permissions:
-  contents: write       # upload release assets
-  packages: write       # push to ghcr.io
+  contents: write
+  packages: write
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}              # egoavara/route-prism
+  IMAGE_NAME: ${{ github.repository }}
   CHART_OCI_REPO: ghcr.io/${{ github.repository_owner }}/charts
   GO_VERSION: '1.25'
   NODE_VERSION: '24'
-  # Force JS-based actions (checkout, upload-artifact, etc.) to run on
-  # Node.js 24 instead of the deprecated Node.js 20 runtime.
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
 jobs:
@@ -73,20 +71,35 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'pnpm'
           cache-dependency-path: |
-            web/pnpm-lock.yaml
-            web/widget/pnpm-lock.yaml
+            modules/web-dashboard/pnpm-lock.yaml
+            modules/web-widget/pnpm-lock.yaml
+
+      - name: Install pnpm workspace deps
+        run: pnpm install --frozen-lockfile
+
+      - name: Restore moon + operator tool cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            .moon/cache
+            modules/operator/bin
+          key: moon-${{ runner.os }}-${{ hashFiles('.moon/toolchain.yml', 'modules/operator/go.sum', 'pnpm-lock.yaml', 'modules/operator/scripts/install-tools.sh', 'modules/operator/moon.yml') }}
+          restore-keys: |
+            moon-${{ runner.os }}-
+
+      - uses: moonrepo/setup-toolchain@v0
+        with:
+          auto-install: true
 
       - name: Build dashboard + widget bundles
-        run: |
-          (cd web && pnpm install --frozen-lockfile && pnpm build)
-          (cd web/widget && pnpm install --frozen-lockfile && pnpm build)
+        run: moon run web-dashboard:compile web-widget:compile
 
       - uses: actions/upload-artifact@v4
         with:
           name: web-dist
           path: |
-            internal/dashboard/dist
-            internal/widget/dist
+            modules/operator/internal/dashboard/dist
+            modules/operator/internal/widget/dist
           if-no-files-found: error
           retention-days: 1
 
@@ -116,21 +129,21 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: web-dist
-          # upload-artifact computed `internal/` as the common ancestor and
-          # stripped it, so we restore under that same prefix here.
-          path: internal
+          path: modules/operator/internal
 
       - name: Verify web bundles present
         run: |
-          test -f internal/dashboard/dist/index.html
-          test -d internal/widget/dist
+          test -f modules/operator/internal/dashboard/dist/index.html
+          test -d modules/operator/internal/widget/dist
 
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
+          cache-dependency-path: modules/operator/go.sum
 
       - name: Build operator binary
+        working-directory: modules/operator
         env:
           CGO_ENABLED: '0'
           GOOS: ${{ matrix.goos }}
@@ -142,11 +155,10 @@ jobs:
             -o "dist/manager_${GOOS}_${GOARCH}${{ matrix.ext }}" \
             ./cmd
 
-      - name: Upload binary artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: manager-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: dist/manager_${{ matrix.goos }}_${{ matrix.goarch }}${{ matrix.ext }}
+          path: modules/operator/dist/manager_${{ matrix.goos }}_${{ matrix.goarch }}${{ matrix.ext }}
           retention-days: 1
 
       - name: Attach binary to GitHub Release
@@ -154,7 +166,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           asset="route-prism-operator_${{ needs.meta.outputs.version_no_v }}_${{ matrix.goos }}_${{ matrix.goarch }}${{ matrix.ext }}"
-          cp "dist/manager_${{ matrix.goos }}_${{ matrix.goarch }}${{ matrix.ext }}" "${asset}"
+          cp "modules/operator/dist/manager_${{ matrix.goos }}_${{ matrix.goarch }}${{ matrix.ext }}" "${asset}"
           sha256sum "${asset}" > "${asset}.sha256"
           gh release upload "${{ needs.meta.outputs.version }}" \
             "${asset}" "${asset}.sha256" --clobber
@@ -172,19 +184,19 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: manager-linux-amd64
-          path: dist
+          path: modules/operator/dist
 
       - name: Download linux/arm64 binary
         uses: actions/download-artifact@v4
         with:
           name: manager-linux-arm64
-          path: dist
+          path: modules/operator/dist
 
       - name: Make binaries executable
         run: |
-          chmod +x dist/manager_linux_amd64
-          chmod +x dist/manager_linux_arm64
-          ls -la dist/
+          chmod +x modules/operator/dist/manager_linux_amd64
+          chmod +x modules/operator/dist/manager_linux_arm64
+          ls -la modules/operator/dist/
 
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
@@ -209,8 +221,8 @@ jobs:
       - name: Build & push multi-arch image
         uses: docker/build-push-action@v6
         with:
-          context: .
-          file: Dockerfile.release
+          context: modules/operator
+          file: modules/operator/Dockerfile.release
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.img.outputs.tags }}
@@ -230,19 +242,35 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
+          cache-dependency-path: modules/operator/go.sum
+
+      - name: Restore moon + operator tool cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            .moon/cache
+            modules/operator/bin
+          key: moon-${{ runner.os }}-${{ hashFiles('.moon/toolchain.yml', 'modules/operator/go.sum', 'pnpm-lock.yaml', 'modules/operator/scripts/install-tools.sh', 'modules/operator/moon.yml') }}
+          restore-keys: |
+            moon-${{ runner.os }}-
+
+      - uses: moonrepo/setup-toolchain@v0
+        with:
+          auto-install: true
 
       - name: Build installer manifest
         env:
           IMG: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.meta.outputs.version_no_v }}
-        run: |
-          make build-installer IMG="${IMG}"
-          mv dist/install.yaml "dist/route-prism-${{ needs.meta.outputs.version_no_v }}.yaml"
+        run: moon run operator:build-installer
+
+      - name: Rename for release
+        run: mv modules/operator/dist/install.yaml "modules/operator/dist/route-prism-${{ needs.meta.outputs.version_no_v }}.yaml"
 
       - name: Attach install.yaml to release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          asset="dist/route-prism-${{ needs.meta.outputs.version_no_v }}.yaml"
+          asset="modules/operator/dist/route-prism-${{ needs.meta.outputs.version_no_v }}.yaml"
           gh release upload "${{ needs.meta.outputs.version }}" \
             "${asset}" --clobber
 
@@ -259,16 +287,31 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
+          cache-dependency-path: modules/operator/go.sum
 
       - uses: azure/setup-helm@v4
         with:
           version: v3.16.4
 
+      - name: Restore moon + operator tool cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            .moon/cache
+            modules/operator/bin
+          key: moon-${{ runner.os }}-${{ hashFiles('.moon/toolchain.yml', 'modules/operator/go.sum', 'pnpm-lock.yaml', 'modules/operator/scripts/install-tools.sh', 'modules/operator/moon.yml') }}
+          restore-keys: |
+            moon-${{ runner.os }}-
+
+      - uses: moonrepo/setup-toolchain@v0
+        with:
+          auto-install: true
+
       - name: Stage CRDs into chart
         run: |
-          make manifests
+          moon run operator:manifests
           mkdir -p charts/route-prism/crds
-          cp config/crd/bases/*.yaml charts/route-prism/crds/
+          cp modules/operator/config/crd/bases/*.yaml charts/route-prism/crds/
 
       - name: Set chart version & appVersion
         env:

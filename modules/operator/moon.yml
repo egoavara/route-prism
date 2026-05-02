@@ -1,0 +1,147 @@
+$schema: 'https://moonrepo.dev/schemas/project.json'
+
+layer: 'application'
+language: 'go'
+stack: 'backend'
+
+# Tool versions (mirror Makefile pins). Bumped here, propagated to tasks via env.
+env:
+  CONTROLLER_TOOLS_VERSION: 'v0.20.1'
+  KUSTOMIZE_VERSION: 'v5.8.1'
+  GOLANGCI_LINT_VERSION: 'v2.8.0'
+  IMG: 'controller:latest'
+  IMG_SAMPLE_TIER: 'route-prism-sample-tier:latest'
+
+tasks:
+  # Tool installation. Re-runs idempotently; binaries land under bin/.
+  setup-tools:
+    command: 'bash scripts/install-tools.sh'
+    inputs:
+      - 'scripts/install-tools.sh'
+      - 'moon.yml'
+    outputs:
+      - 'bin/controller-gen'
+      - 'bin/kustomize'
+      - 'bin/golangci-lint'
+      - 'bin/setup-envtest'
+
+  manifests:
+    deps: ['setup-tools']
+    command: 'bin/controller-gen rbac:roleName=manager-role crd webhook paths=./... output:crd:artifacts:config=config/crd/bases'
+    inputs:
+      - 'api/**/*.go'
+      - 'internal/**/*.go'
+      - 'cmd/**/*.go'
+    outputs:
+      - 'config/crd/bases'
+      - 'config/rbac/role.yaml'
+
+  generate:
+    deps: ['setup-tools']
+    command: 'bin/controller-gen object:headerFile=hack/boilerplate.go.txt paths=./...'
+    inputs:
+      - 'api/**/*.go'
+      - 'hack/boilerplate.go.txt'
+    outputs:
+      - 'api/**/zz_generated.*.go'
+
+  compile:
+    deps:
+      - 'manifests'
+      - 'generate'
+      - 'web-dashboard:compile'
+      - 'web-widget:compile'
+    command: 'go build -o bin/manager ./cmd'
+    env:
+      CGO_ENABLED: '0'
+      GOOS: 'linux'
+      GOARCH: 'amd64'
+    inputs:
+      - 'cmd/main.go'
+      - 'api/**/*.go'
+      - 'internal/**/*.go'
+      - 'go.mod'
+      - 'go.sum'
+      - 'internal/dashboard/dist/**/*'
+      - 'internal/widget/dist/**/*'
+    outputs:
+      - 'bin/manager'
+
+  compile-sample-tier:
+    command: 'go build -o bin/sample-tier ./cmd/sample-tier'
+    env:
+      CGO_ENABLED: '0'
+      GOOS: 'linux'
+      GOARCH: 'amd64'
+    inputs:
+      - 'cmd/sample-tier/**/*.go'
+      - 'go.mod'
+      - 'go.sum'
+    outputs:
+      - 'bin/sample-tier'
+
+  build:
+    deps: ['compile']
+    command: 'docker build -t $IMG .'
+
+  build-sample-tier:
+    deps: ['compile-sample-tier']
+    command: 'docker build -t $IMG_SAMPLE_TIER -f Dockerfile.sample-tier .'
+
+  push:
+    deps: ['build']
+    command: 'docker push $IMG'
+    options:
+      cache: false
+
+  push-sample-tier:
+    deps: ['build-sample-tier']
+    command: 'docker push $IMG_SAMPLE_TIER'
+    options:
+      cache: false
+
+  lint:
+    deps: ['setup-tools']
+    command: 'bin/golangci-lint run'
+    inputs:
+      - '**/*.go'
+      - '.golangci.yml'
+      - '.custom-gcl.yml'
+
+  format:
+    deps: ['setup-tools']
+    script: 'bin/golangci-lint run --fix || true'
+    inputs:
+      - '**/*.go'
+      - '.golangci.yml'
+    options:
+      cache: false
+
+  test:
+    deps: ['manifests', 'generate', 'setup-tools']
+    command: 'bash scripts/run-tests.sh'
+    inputs:
+      - '**/*.go'
+      - 'go.mod'
+      - 'go.sum'
+    env:
+      ENVTEST_K8S_VERSION: '1.34.0'
+
+  e2e:
+    deps: ['manifests', 'generate']
+    command: 'go test -tags=e2e ./test/e2e/ -v -ginkgo.v'
+    env:
+      KIND_CLUSTER: 'route-prism-test-e2e'
+    options:
+      cache: false
+
+  build-installer:
+    deps: ['manifests', 'generate', 'setup-tools']
+    command: 'bash scripts/build-installer.sh'
+    inputs:
+      - 'config/**/*'
+      - 'cmd/**/*.go'
+      - 'api/**/*.go'
+      - 'internal/**/*.go'
+    outputs:
+      - 'dist/install.yaml'

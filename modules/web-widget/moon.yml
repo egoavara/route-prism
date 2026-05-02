@@ -1,0 +1,47 @@
+$schema: 'https://moonrepo.dev/schemas/project.json'
+
+layer: 'application'
+language: 'typescript'
+stack: 'frontend'
+
+tasks:
+  lint:
+    command: 'biome check .'
+    inputs:
+      - 'src/**/*'
+      - 'index.html'
+      - '/biome.json'
+
+  format:
+    script: 'biome check --write . || true'
+    inputs:
+      - 'src/**/*'
+      - 'index.html'
+      - '/biome.json'
+    options:
+      cache: false
+
+  compile:
+    command: 'pnpm exec vite build'
+    deps:
+      - '~:typecheck'
+    inputs:
+      - 'src/**/*'
+      - 'index.html'
+      - 'package.json'
+      - 'tsconfig*.json'
+      - 'vite.config.ts'
+    outputs:
+      - '/modules/operator/internal/widget/dist'
+
+  typecheck:
+    command: 'pnpm exec tsc -b'
+    inputs:
+      - 'src/**/*'
+      - 'tsconfig*.json'
+
+  dev:
+    command: 'pnpm exec vite'
+    preset: 'server'
+    options:
+      cache: false

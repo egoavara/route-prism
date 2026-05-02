@@ -1,0 +1,9 @@
+# Multi-arch release Dockerfile. Consumes prebuilt binaries staged by the
+# release workflow under dist/manager_${TARGETOS}_${TARGETARCH}.
+FROM gcr.io/distroless/static:nonroot
+ARG TARGETOS
+ARG TARGETARCH
+WORKDIR /
+COPY dist/manager_${TARGETOS}_${TARGETARCH} /manager
+USER 65532:65532
+ENTRYPOINT ["/manager"]

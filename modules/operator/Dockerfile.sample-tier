@@ -1,0 +1,7 @@
+# Slim Dockerfile for the demo sample-tier binary. Built by
+# `moon run operator:build-sample-tier`.
+FROM gcr.io/distroless/static:nonroot
+WORKDIR /
+COPY bin/sample-tier /sample-tier
+USER 65532:65532
+ENTRYPOINT ["/sample-tier"]

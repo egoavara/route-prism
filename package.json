@@ -1,0 +1,8 @@
+{
+  "name": "route-prism",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "@biomejs/biome": "^2.1.0"
+  }
+}

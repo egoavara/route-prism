@@ -1,5 +1,0 @@
-# Minimal context for the release Dockerfile — we only need the prebuilt
-# manager binaries that the GitHub Actions workflow stages under dist/.
-**
-!dist/manager_linux_amd64
-!dist/manager_linux_arm64

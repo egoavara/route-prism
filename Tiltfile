@@ -2,22 +2,22 @@
 # Tiltfile for route-prism local dev loop.
 #
 # Setup steps the user runs MANUALLY (this Tiltfile does not bootstrap them):
-#   1. ./hack/kind-up.sh [--platform cilium|istio]
+#   1. ./modules/operator/hack/kind-up.sh [--platform cilium|istio]
 #                              — create kind cluster + install chosen mesh
 #                                + Gateway API CRDs (cilium is the default)
-#   2. ./hack/tilt-up.sh        — launch Tilt with project-local KUBECONFIG
+#   2. ./modules/operator/hack/tilt-up.sh        — launch Tilt with project-local KUBECONFIG
 #
 # Teardown:
-#   ./hack/kind-down.sh         — delete the kind cluster
+#   ./modules/operator/hack/kind-down.sh         — delete the kind cluster
 #
-# The wrapper script sets KUBECONFIG=$(pwd)/bin/.kubeconfig before exec'ing
+# The wrapper script sets KUBECONFIG=$(pwd)/modules/operator/bin/.kubeconfig before exec'ing
 # tilt, so this Tiltfile only needs to verify Tilt landed on the right
 # context, then proceed to deploy.
 
 CLUSTER = "route-prism"
 KIND_CONTEXT = "kind-" + CLUSTER
-KIND = "./bin/kind"
-KUBECONFIG_FILE = "bin/.kubeconfig"
+KIND = "./modules/operator/bin/kind"
+KUBECONFIG_FILE = "modules/operator/bin/.kubeconfig"
 
 # Refuse to run unless launched via the wrapper.
 _kc_env = os.getenv("KUBECONFIG", "")
@@ -29,21 +29,21 @@ if _kc_env != _expected_kc:
         "=" * 64,
         "Launch Tilt via the wrapper:",
         "",
-        "    ./hack/tilt-up.sh",
+        "    ./modules/operator/hack/tilt-up.sh",
         "",
-        "(prerequisite: ./hack/kind-up.sh has created the cluster)",
+        "(prerequisite: ./modules/operator/hack/kind-up.sh has created the cluster)",
         "=" * 64,
         "",
     ]))
 
 if k8s_context() != KIND_CONTEXT:
-    fail("Tilt sees k8s_context()=%r. Run ./hack/kind-up.sh then ./hack/tilt-up.sh." % k8s_context())
+    fail("Tilt sees k8s_context()=%r. Run ./modules/operator/hack/kind-up.sh then ./modules/operator/hack/tilt-up.sh." % k8s_context())
 
 allow_k8s_contexts(KIND_CONTEXT)
 
 # Sanity: cluster must already have Gateway API CRDs (installed by kind-up.sh).
 if not str(local("kubectl get crd httproutes.gateway.networking.k8s.io --no-headers --ignore-not-found 2>/dev/null || true", quiet = True)).strip():
-    fail("Gateway API CRDs missing. Run ./hack/kind-up.sh [--platform cilium|istio] to install the mesh + CRDs.")
+    fail("Gateway API CRDs missing. Run ./modules/operator/hack/kind-up.sh [--platform cilium|istio] to install the mesh + CRDs.")
 
 # Sanity: at least one mesh-provided GatewayClass must be registered. The
 # controller is mesh-agnostic (it produces GAMMA HTTPRoutes), but if neither
@@ -55,7 +55,7 @@ if "cilium" in _gc_names:
 elif "istio" in _gc_names:
     PLATFORM = "istio"
 else:
-    fail("No GatewayClass 'cilium' or 'istio' found. Run ./hack/kind-up.sh [--platform cilium|istio].")
+    fail("No GatewayClass 'cilium' or 'istio' found. Run ./modules/operator/hack/kind-up.sh [--platform cilium|istio].")
 print("→ detected mesh platform: %s" % PLATFORM)
 
 # 1) Compile the manager + sample-tier binaries on the host. Done
@@ -63,36 +63,36 @@ print("→ detected mesh platform: %s" % PLATFORM)
 #    the binaries on disk; resource_deps only orders deploy, not image
 #    build. (sample-tier is the tiny HTTP forwarder used by the 3-tier
 #    devloop sample to chain web→api→db.)
-print("→ initial dashboard build → internal/dashboard/dist ...")
-local("cd web && pnpm install --prefer-offline && pnpm build", echo_off = False)
-print("→ initial widget build → internal/widget/dist ...")
-local("cd web/widget && pnpm install --prefer-offline && pnpm build", echo_off = False)
-print("→ initial Go build → bin/manager-linux, bin/sample-tier-linux ...")
-local("CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/manager-linux cmd/main.go",
+print("→ initial dashboard build → modules/operator/internal/dashboard/dist ...")
+local("cd modules/web-dashboard && pnpm install --prefer-offline && pnpm build", echo_off = False)
+print("→ initial widget build → modules/operator/internal/widget/dist ...")
+local("cd modules/web-widget && pnpm install --prefer-offline && pnpm build", echo_off = False)
+print("→ initial Go build → modules/operator/bin/manager-linux, modules/operator/bin/sample-tier-linux ...")
+local("CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o modules/operator/bin/manager-linux modules/operator/cmd/main.go",
       echo_off = False)
-local("CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/sample-tier-linux ./cmd/sample-tier",
+local("CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o modules/operator/bin/sample-tier-linux ./modules/operator/cmd/sample-tier",
       echo_off = False)
 
 # Watch the web sources and rebuild the embedded dashboard. The output
-# lands in internal/dashboard/dist, which the manager-compile resource
+# lands in modules/operator/internal/dashboard/dist, which the manager-compile resource
 # already watches via its `internal` dep, so a frontend edit chains
 # through to a new manager binary automatically.
 local_resource(
     "dashboard-compile",
-    cmd = "cd web && pnpm build",
-    deps = ["web/src", "web/index.html", "web/vite.config.ts", "web/package.json"],
-    ignore = ["web/node_modules", "web/dist", "web/widget"],
+    cmd = "cd modules/web-dashboard && pnpm build",
+    deps = ["modules/web-dashboard/src", "modules/web-dashboard/index.html", "modules/web-dashboard/vite.config.ts", "modules/web-dashboard/package.json"],
+    ignore = ["modules/web-dashboard/node_modules", "modules/web-dashboard/dist", "modules/web-widget"],
     labels = ["dev"],
 )
 
 # Watch widget sources and rebuild the embedded widget bundle. Output lands
-# in internal/widget/dist, which manager-compile picks up via its `internal`
+# in modules/operator/internal/widget/dist, which manager-compile picks up via its `internal`
 # dep so a widget edit chains to a fresh manager binary.
 local_resource(
     "widget-compile",
-    cmd = "cd web/widget && pnpm build",
-    deps = ["web/widget/src", "web/widget/index.html", "web/widget/vite.config.ts", "web/widget/package.json"],
-    ignore = ["web/widget/node_modules"],
+    cmd = "cd modules/web-widget && pnpm build",
+    deps = ["modules/web-widget/src", "modules/web-widget/index.html", "modules/web-widget/vite.config.ts", "modules/web-widget/package.json"],
+    ignore = ["modules/web-widget/node_modules"],
     labels = ["dev"],
 )
 
@@ -101,15 +101,15 @@ local_resource(
 # `only=`) reruns; the affected Pod is replaced.
 local_resource(
     "manager-compile",
-    cmd = "CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/manager-linux cmd/main.go",
-    deps = ["cmd/main.go", "api", "internal", "go.mod", "go.sum"],
+    cmd = "CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o modules/operator/bin/manager-linux modules/operator/cmd/main.go",
+    deps = ["modules/operator/cmd/main.go", "modules/operator/api", "modules/operator/internal", "modules/operator/go.mod", "modules/operator/go.sum"],
     resource_deps = ["dashboard-compile", "widget-compile"],
     labels = ["dev"],
 )
 local_resource(
     "sample-tier-compile",
-    cmd = "CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/sample-tier-linux ./cmd/sample-tier",
-    deps = ["cmd/sample-tier", "go.mod", "go.sum"],
+    cmd = "CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o modules/operator/bin/sample-tier-linux ./modules/operator/cmd/sample-tier",
+    deps = ["modules/operator/cmd/sample-tier", "modules/operator/go.mod", "modules/operator/go.sum"],
     labels = ["dev"],
 )
 
@@ -122,11 +122,11 @@ docker_build(
     dockerfile_contents = """
 FROM gcr.io/distroless/static:nonroot
 WORKDIR /
-COPY bin/manager-linux /manager
+COPY modules/operator/bin/manager-linux /manager
 USER 65532:65532
 ENTRYPOINT ["/manager"]
 """,
-    only = ["bin/manager-linux"],
+    only = ["modules/operator/bin/manager-linux"],
 )
 docker_build(
     "route-prism-sample-tier",         # referenced by test/devloop/sample.yaml
@@ -134,15 +134,15 @@ docker_build(
     dockerfile_contents = """
 FROM gcr.io/distroless/static:nonroot
 WORKDIR /
-COPY bin/sample-tier-linux /sample-tier
+COPY modules/operator/bin/sample-tier-linux /sample-tier
 USER 65532:65532
 ENTRYPOINT ["/sample-tier"]
 """,
-    only = ["bin/sample-tier-linux"],
+    only = ["modules/operator/bin/sample-tier-linux"],
 )
 
 # 3) Apply the kustomize manifests (CRDs, RBAC, manager Deployment, etc.).
-k8s_yaml(kustomize("config/default"))
+k8s_yaml(kustomize("modules/operator/config/default"))
 
 # 4) Group the controller resources for the Tilt UI.
 k8s_resource(
@@ -176,9 +176,9 @@ k8s_resource(
 #   curl                                       http://localhost:8083/api  → db direct
 #   curl -H 'Cookie: x-route-prism=demo.db:db-laptop' http://localhost:8080/api
 #                                              → web → api → db (RemoteRoute) → host:18083
-k8s_yaml("test/devloop/sample.yaml")
+k8s_yaml("modules/operator/test/devloop/sample.yaml")
 
-DEMO_TIERS = ["web", "api", "db"]
+DEMO_TIERS = ["web", "modules/operator/api", "db"]
 for tier in DEMO_TIERS:
     k8s_resource(
         workload = tier,
@@ -271,8 +271,8 @@ print("→ kind→host gateway: %s (sample-tier listens on %d)" % (HOST_IP, REMO
 # differ.
 local_resource(
     "remote-tier-compile",
-    cmd = "go build -o bin/sample-tier-host ./cmd/sample-tier",
-    deps = ["cmd/sample-tier", "go.mod", "go.sum"],
+    cmd = "go build -o modules/operator/bin/sample-tier-host ./modules/operator/cmd/sample-tier",
+    deps = ["modules/operator/cmd/sample-tier", "modules/operator/go.mod", "modules/operator/go.sum"],
     labels = ["remote"],
 )
 
@@ -282,8 +282,8 @@ local_resource(
 # 5xx (since this RR has no fallback in-cluster variant).
 local_resource(
     "remote-tier",
-    serve_cmd = "PORT=%d TIER=db VARIANT=db-laptop bin/sample-tier-host" % REMOTE_TIER_PORT,
-    deps = ["bin/sample-tier-host"],
+    serve_cmd = "PORT=%d TIER=db VARIANT=db-laptop modules/operator/bin/sample-tier-host" % REMOTE_TIER_PORT,
+    deps = ["modules/operator/bin/sample-tier-host"],
     resource_deps = ["remote-tier-compile"],
     labels = ["remote"],
     readiness_probe = probe(
@@ -341,7 +341,7 @@ k8s_resource(
 # spec prints request / expected variant / observed pod.
 local_resource(
     "check",
-    cmd = "go test -tags routing -timeout 5m -v -count=1 ./test/e2e/ -ginkgo.label-filter=check -ginkgo.no-color=false",
+    cmd = "go test -tags routing -timeout 5m -v -count=1 ./modules/operator/test/e2e/ -ginkgo.label-filter=check -ginkgo.no-color=false",
     auto_init = False,
     trigger_mode = TRIGGER_MODE_MANUAL,
     resource_deps = ["controller", "demo-objects"],
@@ -369,32 +369,32 @@ local_resource(
 # is fast (Docker / Go caches).
 #
 # CLI escape hatches for narrow runs:
-#   go run ./cmd/e2e-matrix --groups=g1 --platforms=cilium-istio --keep
-#   go run ./cmd/e2e-matrix --skip-build           # reuse last image
+#   go run ./modules/operator/cmd/e2e-matrix --groups=g1 --platforms=cilium-istio --keep
+#   go run ./modules/operator/cmd/e2e-matrix --skip-build           # reuse last image
 local_resource(
     "e2e-matrix",
-    cmd = "go run ./cmd/e2e-matrix",
+    cmd = "go run ./modules/operator/cmd/e2e-matrix",
     auto_init = False,
     trigger_mode = TRIGGER_MODE_MANUAL,
     labels = ["e2e"],
 )
 local_resource(
     "e2e-cilium",
-    cmd = "go run ./cmd/e2e-matrix --platforms=cilium",
+    cmd = "go run ./modules/operator/cmd/e2e-matrix --platforms=cilium",
     auto_init = False,
     trigger_mode = TRIGGER_MODE_MANUAL,
     labels = ["e2e"],
 )
 local_resource(
     "e2e-istio",
-    cmd = "go run ./cmd/e2e-matrix --platforms=istio",
+    cmd = "go run ./modules/operator/cmd/e2e-matrix --platforms=istio",
     auto_init = False,
     trigger_mode = TRIGGER_MODE_MANUAL,
     labels = ["e2e"],
 )
 local_resource(
     "e2e-cilium-istio",
-    cmd = "go run ./cmd/e2e-matrix --platforms=cilium-istio",
+    cmd = "go run ./modules/operator/cmd/e2e-matrix --platforms=cilium-istio",
     auto_init = False,
     trigger_mode = TRIGGER_MODE_MANUAL,
     labels = ["e2e"],
@@ -455,11 +455,11 @@ local_resource(
     "access-info",
     cmd = """
 set -eu
-KC="$(pwd)/bin/.kubeconfig"
+KC="$(pwd)/modules/operator/bin/.kubeconfig"
 CTX="kind-route-prism"
 
 if [ ! -s "$KC" ]; then
-    echo "kubeconfig not found at $KC — start Tilt via ./hack/tilt-up.sh first." >&2
+    echo "kubeconfig not found at $KC — start Tilt via ./modules/operator/hack/tilt-up.sh first." >&2
     exit 1
 fi
 
@@ -475,7 +475,7 @@ KEY=$(kubectl --kubeconfig "$KC" config view --raw --minify \\
 cat <<EOF
 
 == Option A — local shell, no system kubeconfig changes =====================
-  export KUBECONFIG="$(pwd)/bin/.kubeconfig"
+  export KUBECONFIG="$(pwd)/modules/operator/bin/.kubeconfig"
   kubectl get nodes
 
 == Option B — install context into your kubeconfig (run anywhere) ===========
@@ -505,7 +505,7 @@ route-prism dev loop ready.
 
   Tilt UI : http://localhost:10350
   KUBECONFIG (for this shell):
-      export KUBECONFIG=$(pwd)/bin/.kubeconfig
+      export KUBECONFIG=$(pwd)/modules/operator/bin/.kubeconfig
 
   Click the 'access-info' resource in the UI for kubectl/docker/kind
   one-liners (or run: tilt trigger access-info).

@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="web/public/icons.svg" alt="route-prism logo" width="120" height="120" />
+<img src="modules/web-dashboard/public/icons.svg" alt="route-prism logo" width="120" height="120" />
 
 # route-prism
 
