@@ -6,6 +6,8 @@ on:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+  CLUSTER: route-prism-test-e2e
+  KIND_CLUSTER: route-prism-test-e2e
 
 jobs:
   test-e2e:
@@ -46,22 +48,19 @@ jobs:
 
       - uses: moonrepo/setup-toolchain@v0
 
-      - name: Install kind
-        run: |
-          curl -Lo ./kind https://kind.sigs.k8s.io/dl/latest/kind-linux-$(go env GOARCH)
-          chmod +x ./kind
-          sudo mv ./kind /usr/local/bin/kind
+      # Same scripts the dev loop uses locally — kind + Cilium + Gateway API CRDs.
+      - name: Provision kind cluster + mesh
+        run: ./scripts/kind-up.sh --platform cilium
 
-      - name: Tidy go modules
-        working-directory: modules/operator
-        run: go mod tidy
-
-      - name: Provision kind cluster for e2e
-        run: kind create cluster --name route-prism-test-e2e
+      # bin/{kind,cilium,istioctl} are downloaded by kind-up.sh; expose them
+      # to subsequent steps so e2e helpers (LoadImageToKindClusterWithName)
+      # find `kind` on PATH.
+      - name: Expose project bin/ on PATH
+        run: echo "${GITHUB_WORKSPACE}/bin" >> "$GITHUB_PATH"
 
       - name: Run e2e tests
         run: moon run operator:e2e
 
       - name: Tear down kind cluster
         if: always()
-        run: kind delete cluster --name route-prism-test-e2e
+        run: ./scripts/kind-down.sh
