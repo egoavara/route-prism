@@ -49,14 +49,14 @@ jobs:
       - uses: moonrepo/setup-toolchain@v0
 
       # Same scripts the dev loop uses locally — kind + Cilium + Gateway API CRDs.
+      # Export KUBECONFIG + add bin/ to PATH for subsequent steps so the e2e
+      # test process inherits both (kubectl needs the kubeconfig; helpers like
+      # LoadImageToKindClusterWithName need `kind` on PATH).
       - name: Provision kind cluster + mesh
-        run: ./scripts/kind-up.sh --platform cilium
-
-      # bin/{kind,cilium,istioctl} are downloaded by kind-up.sh; expose them
-      # to subsequent steps so e2e helpers (LoadImageToKindClusterWithName)
-      # find `kind` on PATH.
-      - name: Expose project bin/ on PATH
-        run: echo "${GITHUB_WORKSPACE}/bin" >> "$GITHUB_PATH"
+        run: |
+          ./scripts/kind-up.sh --platform cilium
+          echo "KUBECONFIG=${GITHUB_WORKSPACE}/bin/.kubeconfig" >> "$GITHUB_ENV"
+          echo "${GITHUB_WORKSPACE}/bin" >> "$GITHUB_PATH"
 
       - name: Run e2e tests
         run: moon run operator:e2e
