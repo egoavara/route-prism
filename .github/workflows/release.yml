@@ -88,8 +88,6 @@ jobs:
             moon-${{ runner.os }}-
 
       - uses: moonrepo/setup-toolchain@v0
-        with:
-          auto-install: true
 
       - name: Build dashboard + widget bundles
         run: moon run web-dashboard:compile web-widget:compile
@@ -255,8 +253,6 @@ jobs:
             moon-${{ runner.os }}-
 
       - uses: moonrepo/setup-toolchain@v0
-        with:
-          auto-install: true
 
       - name: Build installer manifest
         env:
@@ -304,8 +300,6 @@ jobs:
             moon-${{ runner.os }}-
 
       - uses: moonrepo/setup-toolchain@v0
-        with:
-          auto-install: true
 
       - name: Stage CRDs into chart
         run: |

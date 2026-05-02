@@ -45,8 +45,6 @@ jobs:
             moon-${{ runner.os }}-
 
       - uses: moonrepo/setup-toolchain@v0
-        with:
-          auto-install: true
 
       - name: Run unit tests
         run: moon run operator:test
