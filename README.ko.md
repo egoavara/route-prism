@@ -4,17 +4,19 @@
 
 # route-prism
 
-**컨텍스트 인지형 [GAMMA](https://gateway-api.sigs.k8s.io/mesh/gamma/) 라우팅 컨트롤러 — 쿠키 또는 헤더 한 줄로 어떤 Service 변종(variant)으로 갈지 결정합니다.**
+**컨텍스트 인지형 [GAMMA](https://gateway-api.sigs.k8s.io/mesh/gamma/) 라우팅 컨트롤러**
+
+**쿠키 또는 헤더 한 줄로 어떤 Service 변종(variant)으로 갈지 결정합니다.**
 
 [English](README.md) | [한국어](README.ko.md) | [Wiki](https://github.com/egoavara/route-prism/wiki)
 
 [![License](https://img.shields.io/github/license/egoavara/route-prism?color=blue)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/egoavara/route-prism?include_prereleases&sort=semver)](https://github.com/egoavara/route-prism/releases)
-[![Container](https://img.shields.io/badge/ghcr.io-egoavara%2Froute--prism-2496ED?logo=docker&logoColor=white)](https://github.com/egoavara/route-prism/pkgs/container/route-prism)
-[![Helm Chart](https://img.shields.io/badge/Helm-OCI-0F1689?logo=helm&logoColor=white)](https://github.com/egoavara/route-prism/pkgs/container/charts%2Froute-prism)
 [![Go Version](https://img.shields.io/github/go-mod/go-version/egoavara/route-prism)](go.mod)
 [![Gateway API](https://img.shields.io/badge/Gateway%20API-GAMMA-326CE5?logo=kubernetes&logoColor=white)](https://gateway-api.sigs.k8s.io/mesh/gamma/)
-[![Release Workflow](https://github.com/egoavara/route-prism/actions/workflows/release.yml/badge.svg)](https://github.com/egoavara/route-prism/actions/workflows/release.yml)
+
+[![Container](https://img.shields.io/badge/ghcr.io-egoavara%2Froute--prism-2496ED?logo=docker&logoColor=white)](https://github.com/egoavara/route-prism/pkgs/container/route-prism)
+[![Helm Chart](https://img.shields.io/badge/Helm-OCI-0F1689?logo=helm&logoColor=white)](https://github.com/egoavara/route-prism/pkgs/container/charts%2Froute-prism)[![Release Workflow](https://github.com/egoavara/route-prism/actions/workflows/release.yml/badge.svg)](https://github.com/egoavara/route-prism/actions/workflows/release.yml)
 
 </div>
 
