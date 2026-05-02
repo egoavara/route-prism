@@ -45,6 +45,9 @@ linters:
           - dupl
           - lll
         path: internal/*
+      - linters:
+          - lll
+        path: cmd/sample-tier/.*
     paths:
       - third_party$
       - builtin$

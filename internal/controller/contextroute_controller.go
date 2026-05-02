@@ -82,7 +82,6 @@ type ContextRouteReconciler struct {
 // +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch;update
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch;create;update;patch;delete
 
-//nolint:gocyclo // Reconcile naturally branches across resource phases.
 func (r *ContextRouteReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx).WithValues("contextroute", req.NamespacedName)
 
@@ -94,116 +93,20 @@ func (r *ContextRouteReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, err
 	}
 
-	if !cr.DeletionTimestamp.IsZero() {
-		if controllerutil.ContainsFinalizer(&cr, FinalizerCR) {
-			if err := r.deleteOwnedHTTPRoute(ctx, &cr); err != nil {
-				return ctrl.Result{}, err
-			}
-			controllerutil.RemoveFinalizer(&cr, FinalizerCR)
-			if err := r.Update(ctx, &cr); err != nil {
-				return ctrl.Result{}, err
-			}
-		}
-		return ctrl.Result{}, nil
-	}
-
-	if !controllerutil.ContainsFinalizer(&cr, FinalizerCR) {
-		controllerutil.AddFinalizer(&cr, FinalizerCR)
-		if err := r.Update(ctx, &cr); err != nil {
-			return ctrl.Result{}, err
-		}
-		return ctrl.Result{Requeue: true}, nil
+	if done, res, err := r.handleDeletionAndFinalizer(ctx, &cr); done {
+		return res, err
 	}
 
 	targetName := cr.Spec.Target.Service.Name
 	cr.Status.TargetService = targetName
 
-	// 1) Conflict resolution: only one ContextRoute per target Service.
-	winner, err := r.resolveOwner(ctx, &cr)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	if winner != nil && winner.Name != cr.Name {
-		cr.Status.Conflict = &routeprismv1alpha1.ConflictRef{
-			Service: targetName,
-			OwnedBy: winner.Name,
-		}
-		cr.Status.MatchedVariants = 0
-		cr.Status.VariantServices = nil
-		setReadyCondition(&cr, false, "Conflict",
-			fmt.Sprintf("ContextRoute %q owns target %q (older creationTimestamp).", winner.Name, targetName))
-		r.event(&cr, corev1.EventTypeWarning, EventReasonConflict,
-			"target %q is owned by ContextRoute %q (older creationTimestamp); skipping.",
-			targetName, winner.Name)
-		return ctrl.Result{}, r.Status().Update(ctx, &cr)
-	}
-	cr.Status.Conflict = nil
-
-	// 1b) RoutingKey conflict — every ContextRoute's effective routing
-	//     key (Spec.RoutingKey or "<ns>.<target>") must be cluster-unique.
-	//     When two CRs collide we let the older creationTimestamp keep its
-	//     key and mark the newer one Ready=False/RoutingKeyConflict.
-	{
-		myKey := cr.EffectiveRoutingKey()
-		var allCRs routeprismv1alpha1.ContextRouteList
-		if err := r.List(ctx, &allCRs); err != nil {
-			return ctrl.Result{}, err
-		}
-		var keyOwner *routeprismv1alpha1.ContextRoute
-		for i := range allCRs.Items {
-			other := &allCRs.Items[i]
-			if other.UID == cr.UID {
-				continue
-			}
-			if other.EffectiveRoutingKey() != myKey {
-				continue
-			}
-			// Older wins; ties broken by name for determinism.
-			if keyOwner == nil ||
-				other.CreationTimestamp.Before(&keyOwner.CreationTimestamp) ||
-				(other.CreationTimestamp.Equal(&keyOwner.CreationTimestamp) && other.Name < keyOwner.Name) {
-				keyOwner = other
-			}
-		}
-		if keyOwner != nil &&
-			(keyOwner.CreationTimestamp.Before(&cr.CreationTimestamp) ||
-				(keyOwner.CreationTimestamp.Equal(&cr.CreationTimestamp) && keyOwner.Name < cr.Name)) {
-			cr.Status.MatchedVariants = 0
-			cr.Status.VariantServices = nil
-			msg := fmt.Sprintf(
-				"routingKey %q conflicts with ContextRoute %q in namespace %q (older creationTimestamp wins).",
-				myKey, keyOwner.Name, keyOwner.Namespace)
-			setReadyCondition(&cr, false, "RoutingKeyConflict", msg)
-			r.event(&cr, corev1.EventTypeWarning, EventReasonConflict, msg)
-			return ctrl.Result{}, r.Status().Update(ctx, &cr)
-		}
-	}
-
-	// 2) Resolve target Service.
-	var target corev1.Service
-	if err := r.Get(ctx, client.ObjectKey{Namespace: cr.Namespace, Name: targetName}, &target); err != nil {
-		if apierrors.IsNotFound(err) {
-			r.event(&cr, corev1.EventTypeWarning, EventReasonTargetNotFound,
-				"target Service %q not found in namespace %q", targetName, cr.Namespace)
-			setReadyCondition(&cr, false, "TargetNotFound", "target Service does not exist")
-			return ctrl.Result{}, r.Status().Update(ctx, &cr)
-		}
+	if done, err := r.checkConflicts(ctx, &cr, targetName); done {
 		return ctrl.Result{}, err
 	}
 
-	if !hasAppProtocol(&target) {
-		r.event(&cr, corev1.EventTypeWarning, EventReasonMissingAppProtocol,
-			"target Service %q has no port with appProtocol set; Cilium GAMMA requires appProtocol (e.g. \"http\") to program L7 dataplane.",
-			target.Name)
-	}
-
-	if !gammaSupportedServiceType(&target) {
-		msg := fmt.Sprintf(
-			"target Service %q has spec.type=%q; GAMMA HTTPRoutes attach only to ClusterIP Services, so cookie/baggage routing will silently fall through to the Service's plain selector",
-			target.Name, target.Spec.Type)
-		r.event(&cr, corev1.EventTypeWarning, EventReasonUnsupportedTargetType, "%s", msg)
-		setReadyCondition(&cr, false, EventReasonUnsupportedTargetType, msg)
-		return ctrl.Result{}, r.Status().Update(ctx, &cr)
+	target, done, err := r.resolveTarget(ctx, &cr, targetName)
+	if done {
+		return ctrl.Result{}, err
 	}
 
 	// 3) Resolve variants.
@@ -246,8 +149,8 @@ func (r *ContextRouteReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			return ctrl.Result{}, err
 		}
 	} else {
-		hr := renderCRHTTPRoute(&cr, &target, variants, true)
-		if err := r.Patch(ctx, hr, client.Apply, client.FieldOwner(FieldOwnerCR), client.ForceOwnership); err != nil { //nolint:staticcheck // client.Apply replacement requires server-side apply refactor; tracked separately.
+		hr := renderCRHTTPRoute(&cr, target, variants, true)
+		if err := r.Apply(ctx, hr, client.FieldOwner(FieldOwnerCR), client.ForceOwnership); err != nil {
 			log.Error(err, "apply HTTPRoute")
 			r.event(&cr, corev1.EventTypeWarning, EventReasonHTTPRouteApplyFailed,
 				"failed to apply HTTPRoute on target %q: %v", target.Name, err)
@@ -284,6 +187,127 @@ func (r *ContextRouteReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			target.Name, len(variantNames), variantNames)
 	}
 	return ctrl.Result{}, nil
+}
+
+// handleDeletionAndFinalizer drives the finalizer lifecycle. Returns
+// done=true when Reconcile should return immediately with the supplied
+// result/error (object is being deleted, or the finalizer was just
+// installed and a requeue is desired).
+func (r *ContextRouteReconciler) handleDeletionAndFinalizer(
+	ctx context.Context, cr *routeprismv1alpha1.ContextRoute,
+) (done bool, res ctrl.Result, err error) {
+	if !cr.DeletionTimestamp.IsZero() {
+		if controllerutil.ContainsFinalizer(cr, FinalizerCR) {
+			if err := r.deleteOwnedHTTPRoute(ctx, cr); err != nil {
+				return true, ctrl.Result{}, err
+			}
+			controllerutil.RemoveFinalizer(cr, FinalizerCR)
+			if err := r.Update(ctx, cr); err != nil {
+				return true, ctrl.Result{}, err
+			}
+		}
+		return true, ctrl.Result{}, nil
+	}
+	if !controllerutil.ContainsFinalizer(cr, FinalizerCR) {
+		controllerutil.AddFinalizer(cr, FinalizerCR)
+		if err := r.Update(ctx, cr); err != nil {
+			return true, ctrl.Result{}, err
+		}
+		return true, ctrl.Result{Requeue: true}, nil
+	}
+	return false, ctrl.Result{}, nil
+}
+
+// checkConflicts handles target-Service ownership and routing-key
+// uniqueness. When a conflict is detected the status is updated and
+// done=true so Reconcile returns immediately.
+func (r *ContextRouteReconciler) checkConflicts(
+	ctx context.Context, cr *routeprismv1alpha1.ContextRoute, targetName string,
+) (done bool, err error) {
+	winner, werr := r.resolveOwner(ctx, cr)
+	if werr != nil {
+		return true, werr
+	}
+	if winner != nil && winner.Name != cr.Name {
+		cr.Status.Conflict = &routeprismv1alpha1.ConflictRef{
+			Service: targetName,
+			OwnedBy: winner.Name,
+		}
+		cr.Status.MatchedVariants = 0
+		cr.Status.VariantServices = nil
+		setReadyCondition(cr, false, "Conflict",
+			fmt.Sprintf("ContextRoute %q owns target %q (older creationTimestamp).", winner.Name, targetName))
+		r.event(cr, corev1.EventTypeWarning, EventReasonConflict,
+			"target %q is owned by ContextRoute %q (older creationTimestamp); skipping.",
+			targetName, winner.Name)
+		return true, r.Status().Update(ctx, cr)
+	}
+	cr.Status.Conflict = nil
+
+	// RoutingKey uniqueness — older creationTimestamp wins; ties broken by name.
+	myKey := cr.EffectiveRoutingKey()
+	var allCRs routeprismv1alpha1.ContextRouteList
+	if err := r.List(ctx, &allCRs); err != nil {
+		return true, err
+	}
+	var keyOwner *routeprismv1alpha1.ContextRoute
+	for i := range allCRs.Items {
+		other := &allCRs.Items[i]
+		if other.UID == cr.UID || other.EffectiveRoutingKey() != myKey {
+			continue
+		}
+		if keyOwner == nil ||
+			other.CreationTimestamp.Before(&keyOwner.CreationTimestamp) ||
+			(other.CreationTimestamp.Equal(&keyOwner.CreationTimestamp) && other.Name < keyOwner.Name) {
+			keyOwner = other
+		}
+	}
+	if keyOwner != nil &&
+		(keyOwner.CreationTimestamp.Before(&cr.CreationTimestamp) ||
+			(keyOwner.CreationTimestamp.Equal(&cr.CreationTimestamp) && keyOwner.Name < cr.Name)) {
+		cr.Status.MatchedVariants = 0
+		cr.Status.VariantServices = nil
+		msg := fmt.Sprintf(
+			"routingKey %q conflicts with ContextRoute %q in namespace %q (older creationTimestamp wins).",
+			myKey, keyOwner.Name, keyOwner.Namespace)
+		setReadyCondition(cr, false, "RoutingKeyConflict", msg)
+		r.event(cr, corev1.EventTypeWarning, EventReasonConflict, msg)
+		return true, r.Status().Update(ctx, cr)
+	}
+	return false, nil
+}
+
+// resolveTarget fetches the target Service and validates it for GAMMA
+// HTTPRoute attachment. Returns done=true with the appropriate result
+// when the target is missing or unsupported; otherwise returns the
+// target Service so the caller can continue.
+func (r *ContextRouteReconciler) resolveTarget(
+	ctx context.Context, cr *routeprismv1alpha1.ContextRoute, targetName string,
+) (target *corev1.Service, done bool, err error) {
+	var svc corev1.Service
+	if gerr := r.Get(ctx, client.ObjectKey{Namespace: cr.Namespace, Name: targetName}, &svc); gerr != nil {
+		if apierrors.IsNotFound(gerr) {
+			r.event(cr, corev1.EventTypeWarning, EventReasonTargetNotFound,
+				"target Service %q not found in namespace %q", targetName, cr.Namespace)
+			setReadyCondition(cr, false, "TargetNotFound", "target Service does not exist")
+			return nil, true, r.Status().Update(ctx, cr)
+		}
+		return nil, true, gerr
+	}
+	if !hasAppProtocol(&svc) {
+		r.event(cr, corev1.EventTypeWarning, EventReasonMissingAppProtocol,
+			"target Service %q has no port with appProtocol set; Cilium GAMMA requires appProtocol (e.g. \"http\") to program L7 dataplane.",
+			svc.Name)
+	}
+	if !gammaSupportedServiceType(&svc) {
+		msg := fmt.Sprintf(
+			"target Service %q has spec.type=%q; GAMMA HTTPRoutes attach only to ClusterIP Services, so cookie/baggage routing will silently fall through to the Service's plain selector",
+			svc.Name, svc.Spec.Type)
+		r.event(cr, corev1.EventTypeWarning, EventReasonUnsupportedTargetType, "%s", msg)
+		setReadyCondition(cr, false, EventReasonUnsupportedTargetType, msg)
+		return nil, true, r.Status().Update(ctx, cr)
+	}
+	return &svc, false, nil
 }
 
 // resolveOwner returns the ContextRoute that should own the target Service

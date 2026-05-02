@@ -79,7 +79,7 @@ func (r *RemoteRouteReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	var cr routeprismv1alpha1.ContextRoute
 	if err := r.Get(ctx, client.ObjectKey{Namespace: rr.Namespace, Name: rr.Spec.ContextRouteRef.Name}, &cr); err != nil {
 		if apierrors.IsNotFound(err) {
-			r.event(&rr, corev1.EventTypeWarning, EventReasonRRContextRouteNotFound,
+			r.event(&rr, EventReasonRRContextRouteNotFound,
 				"ContextRoute %q not found in namespace %q", rr.Spec.ContextRouteRef.Name, rr.Namespace)
 			setRRCondition(&rr, "Ready", metav1.ConditionFalse, "ContextRouteNotFound",
 				fmt.Sprintf("ContextRoute %q does not exist", rr.Spec.ContextRouteRef.Name))
@@ -97,7 +97,7 @@ func (r *RemoteRouteReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	// 2) Pull variant matchLabels from the parent CR. matchExpressions are
 	//    not supported (we cannot synthesize labels guaranteed to match).
 	if len(cr.Spec.Variants.Selector.MatchExpressions) > 0 {
-		r.event(&rr, corev1.EventTypeWarning, EventReasonRRUnsupportedSelector,
+		r.event(&rr, EventReasonRRUnsupportedSelector,
 			"ContextRoute %q variants selector uses matchExpressions; RemoteRoute supports matchLabels only",
 			cr.Name)
 		setRRCondition(&rr, "Ready", metav1.ConditionFalse, "UnsupportedSelector",
@@ -106,7 +106,7 @@ func (r *RemoteRouteReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	}
 	variantLabels := cr.Spec.Variants.Selector.MatchLabels
 	if len(variantLabels) == 0 {
-		r.event(&rr, corev1.EventTypeWarning, EventReasonRRUnsupportedSelector,
+		r.event(&rr, EventReasonRRUnsupportedSelector,
 			"ContextRoute %q variants selector has no matchLabels; the proxy Service would not be picked up as a variant",
 			cr.Name)
 		setRRCondition(&rr, "Ready", metav1.ConditionFalse, "UnsupportedSelector",
@@ -120,12 +120,12 @@ func (r *RemoteRouteReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		reason := "InvalidUpstream"
 		if strings.Contains(err.Error(), "mixed schemes") {
 			reason = "MixedScheme"
-			r.event(&rr, corev1.EventTypeWarning, EventReasonRRMixedScheme, "%s", err.Error())
+			r.event(&rr, EventReasonRRMixedScheme, "%s", err.Error())
 		} else if strings.Contains(err.Error(), "incompatible group modes") {
 			reason = "IncompatibleLBModes"
-			r.event(&rr, corev1.EventTypeWarning, EventReasonRRIncompatibleLBModes, "%s", err.Error())
+			r.event(&rr, EventReasonRRIncompatibleLBModes, "%s", err.Error())
 		} else {
-			r.event(&rr, corev1.EventTypeWarning, EventReasonRRInvalidUpstream, "%s", err.Error())
+			r.event(&rr, EventReasonRRInvalidUpstream, "%s", err.Error())
 		}
 		setRRCondition(&rr, "Ready", metav1.ConditionFalse, reason, err.Error())
 		return ctrl.Result{}, r.Status().Update(ctx, &rr)
@@ -172,7 +172,7 @@ func (r *RemoteRouteReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	if !rr.Status.ProxyReady {
 		setRRCondition(&rr, "Ready", metav1.ConditionFalse, "ProxyNotReady",
 			"Envoy Deployment has no available replicas yet")
-		r.event(&rr, corev1.EventTypeWarning, EventReasonRRProxyNotReady,
+		r.event(&rr, EventReasonRRProxyNotReady,
 			"Envoy Deployment %q has no available replicas yet", remoteProxyName(rr.Name))
 	} else {
 		setRRCondition(&rr, "Ready", metav1.ConditionTrue, "Reconciled",
@@ -188,7 +188,7 @@ func (r *RemoteRouteReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	if rr.Status.ProxyReady && !anyHealthy {
 		setRRCondition(&rr, "UpstreamReachable", metav1.ConditionFalse, "AllUpstreamsUnhealthy",
 			"no upstream is reachable; remote-routed traffic will return 5xx")
-		r.event(&rr, corev1.EventTypeWarning, EventReasonRRAllUpstreamsDown,
+		r.event(&rr, EventReasonRRAllUpstreamsDown,
 			"All upstream groups are unhealthy; check the upstream PCs.")
 	} else if rr.Status.ProxyReady {
 		setRRCondition(&rr, "UpstreamReachable", metav1.ConditionTrue, "Reachable",
@@ -207,8 +207,8 @@ func (r *RemoteRouteReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	return ctrl.Result{RequeueAfter: rrAdminPollInterval}, nil
 }
 
-func (r *RemoteRouteReconciler) apply(ctx context.Context, obj client.Object) error {
-	return r.Patch(ctx, obj, client.Apply, client.FieldOwner(FieldOwnerRR), client.ForceOwnership) //nolint:staticcheck // client.Apply replacement requires server-side apply refactor; tracked separately.
+func (r *RemoteRouteReconciler) apply(ctx context.Context, cfg runtime.ApplyConfiguration) error {
+	return r.Apply(ctx, cfg, client.FieldOwner(FieldOwnerRR), client.ForceOwnership)
 }
 
 // ensureRROwnerRef installs (and if needed updates) the controller
@@ -415,12 +415,14 @@ func setRRCondition(rr *routeprismv1alpha1.RemoteRoute, condType string, status 
 	rr.Status.Conditions = append(out, cond)
 }
 
-//nolint:unparam // signature kept for symmetry / future extensibility
-func (r *RemoteRouteReconciler) event(rr *routeprismv1alpha1.RemoteRoute, eventtype, reason, fmtStr string, args ...any) {
+// event records a Warning event on the RemoteRoute. Only Warning is
+// surfaced today; if Normal events are added later, lift the type back
+// into the parameter list.
+func (r *RemoteRouteReconciler) event(rr *routeprismv1alpha1.RemoteRoute, reason, fmtStr string, args ...any) {
 	if r.Recorder == nil {
 		return
 	}
-	r.Recorder.Eventf(rr, nil, eventtype, reason, reason, fmtStr, args...)
+	r.Recorder.Eventf(rr, nil, corev1.EventTypeWarning, reason, reason, fmtStr, args...)
 }
 
 func (r *RemoteRouteReconciler) SetupWithManager(mgr ctrl.Manager) error {

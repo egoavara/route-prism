@@ -10,8 +10,9 @@ import (
 	"sort"
 
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	metav1ac "k8s.io/client-go/applyconfigurations/meta/v1"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
+	gwv1ac "sigs.k8s.io/gateway-api/applyconfiguration/apis/v1"
 
 	routeprismv1alpha1 "github.com/egoavara/route-prism/api/v1alpha1"
 )
@@ -47,7 +48,7 @@ func firstPort(svc *corev1.Service) gwv1.PortNumber {
 	if len(svc.Spec.Ports) == 0 {
 		return gwv1.PortNumber(80)
 	}
-	return gwv1.PortNumber(svc.Spec.Ports[0].Port)
+	return svc.Spec.Ports[0].Port
 }
 
 // sortedByName produces a stable, name-sorted copy of svcs. We render rules
@@ -59,6 +60,28 @@ func sortedByName(svcs []corev1.Service) []corev1.Service {
 	return out
 }
 
+// crOwnerRef returns the controller OwnerReference apply-config for a CR.
+func crOwnerRef(cr *routeprismv1alpha1.ContextRoute) *metav1ac.OwnerReferenceApplyConfiguration {
+	return metav1ac.OwnerReference().
+		WithAPIVersion(routeprismv1alpha1.GroupVersion.String()).
+		WithKind("ContextRoute").
+		WithName(cr.Name).
+		WithUID(cr.UID).
+		WithController(true).
+		WithBlockOwnerDeletion(true)
+}
+
+// etOwnerRef returns the controller OwnerReference apply-config for an ET.
+func etOwnerRef(et *routeprismv1alpha1.EdgeTransformation) *metav1ac.OwnerReferenceApplyConfiguration {
+	return metav1ac.OwnerReference().
+		WithAPIVersion(routeprismv1alpha1.GroupVersion.String()).
+		WithKind("EdgeTransformation").
+		WithName(et.Name).
+		WithUID(et.UID).
+		WithController(true).
+		WithBlockOwnerDeletion(true)
+}
+
 // renderCRHTTPRoute produces a single HTTPRoute attached to the ContextRoute's
 // target Service. The HTTPRoute contains:
 //
@@ -68,82 +91,56 @@ func sortedByName(svcs []corev1.Service) []corev1.Service {
 //     back to the target Service. Set to false when an EdgeTransformation also
 //     attaches to the target — its rules already provide the default path
 //     and Cilium would otherwise merge two catch-alls into a 50/50 split.
-func renderCRHTTPRoute(cr *routeprismv1alpha1.ContextRoute, target *corev1.Service, variants []corev1.Service, includeCatchAll bool) *gwv1.HTTPRoute {
+func renderCRHTTPRoute(cr *routeprismv1alpha1.ContextRoute, target *corev1.Service, variants []corev1.Service, includeCatchAll bool) *gwv1ac.HTTPRouteApplyConfiguration {
 	parentKind := gwv1.Kind("Service")
 	coreGroup := gwv1.Group("")
 	regexType := gwv1.HeaderMatchRegularExpression
 	targetPort := firstPort(target)
 	routingKey := cr.EffectiveRoutingKey()
 
-	rules := make([]gwv1.HTTPRouteRule, 0, len(variants)+1)
+	rules := make([]*gwv1ac.HTTPRouteRuleApplyConfiguration, 0, len(variants)+1)
 
 	// Variant rules — deterministic order.
 	for _, v := range sortedByName(variants) {
 		vCopy := v
 		vPort := firstPort(&vCopy)
-		rules = append(rules, gwv1.HTTPRouteRule{
-			Matches: []gwv1.HTTPRouteMatch{{
-				Headers: []gwv1.HTTPHeaderMatch{{
-					Type:  &regexType,
-					Name:  gwv1.HTTPHeaderName(routeprismv1alpha1.PropagationHeader),
-					Value: baggageMatchRegex(routingKey, vCopy.Name),
-				}},
-			}},
-			BackendRefs: []gwv1.HTTPBackendRef{{
-				BackendRef: gwv1.BackendRef{
-					BackendObjectReference: gwv1.BackendObjectReference{
-						Group: &coreGroup,
-						Name:  gwv1.ObjectName(vCopy.Name),
-						Port:  &vPort,
-					},
-				},
-			}},
-		})
+		rules = append(rules, gwv1ac.HTTPRouteRule().
+			WithMatches(gwv1ac.HTTPRouteMatch().
+				WithHeaders(gwv1ac.HTTPHeaderMatch().
+					WithType(regexType).
+					WithName(gwv1.HTTPHeaderName(routeprismv1alpha1.PropagationHeader)).
+					WithValue(baggageMatchRegex(routingKey, vCopy.Name)),
+				),
+			).
+			WithBackendRefs(gwv1ac.HTTPBackendRef().
+				WithGroup(coreGroup).
+				WithName(gwv1.ObjectName(vCopy.Name)).
+				WithPort(vPort),
+			),
+		)
 	}
 
 	if includeCatchAll {
-		rules = append(rules, gwv1.HTTPRouteRule{
-			BackendRefs: []gwv1.HTTPBackendRef{{
-				BackendRef: gwv1.BackendRef{
-					BackendObjectReference: gwv1.BackendObjectReference{
-						Group: &coreGroup,
-						Name:  gwv1.ObjectName(target.Name),
-						Port:  &targetPort,
-					},
-				},
-			}},
-		})
+		rules = append(rules, gwv1ac.HTTPRouteRule().
+			WithBackendRefs(gwv1ac.HTTPBackendRef().
+				WithGroup(coreGroup).
+				WithName(gwv1.ObjectName(target.Name)).
+				WithPort(targetPort),
+			),
+		)
 	}
 
-	return &gwv1.HTTPRoute{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: gwv1.GroupVersion.String(),
-			Kind:       "HTTPRoute",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      httpRouteNameForCR(target.Name),
-			Namespace: target.Namespace,
-			Labels:    httpRouteLabels(KindContextRoute, cr.Name),
-			OwnerReferences: []metav1.OwnerReference{{
-				APIVersion:         routeprismv1alpha1.GroupVersion.String(),
-				Kind:               "ContextRoute",
-				Name:               cr.Name,
-				UID:                cr.UID,
-				Controller:         ptr(true),
-				BlockOwnerDeletion: ptr(true),
-			}},
-		},
-		Spec: gwv1.HTTPRouteSpec{
-			CommonRouteSpec: gwv1.CommonRouteSpec{
-				ParentRefs: []gwv1.ParentReference{{
-					Group: &coreGroup,
-					Kind:  &parentKind,
-					Name:  gwv1.ObjectName(target.Name),
-				}},
-			},
-			Rules: rules,
-		},
-	}
+	return gwv1ac.HTTPRoute(httpRouteNameForCR(target.Name), target.Namespace).
+		WithLabels(httpRouteLabels(KindContextRoute, cr.Name)).
+		WithOwnerReferences(crOwnerRef(cr)).
+		WithSpec(gwv1ac.HTTPRouteSpec().
+			WithParentRefs(gwv1ac.ParentReference().
+				WithGroup(coreGroup).
+				WithKind(parentKind).
+				WithName(gwv1.ObjectName(target.Name)),
+			).
+			WithRules(rules...),
+		)
 }
 
 // renderETHTTPRoute produces the EdgeTransformation HTTPRoute attached to the
@@ -151,50 +148,28 @@ func renderCRHTTPRoute(cr *routeprismv1alpha1.ContextRoute, target *corev1.Servi
 // to the translator. The translator forwards directly to a Pod IP (target
 // or variant) so it never re-enters the mesh for the same target — no
 // loop, no need for a "checked-marker" bypass rule.
-func renderETHTTPRoute(et *routeprismv1alpha1.EdgeTransformation, target *corev1.Service) *gwv1.HTTPRoute {
+func renderETHTTPRoute(et *routeprismv1alpha1.EdgeTransformation, target *corev1.Service) *gwv1ac.HTTPRouteApplyConfiguration {
 	parentKind := gwv1.Kind("Service")
 	coreGroup := gwv1.Group("")
 	translatorPort := gwv1.PortNumber(80)
 
-	return &gwv1.HTTPRoute{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: gwv1.GroupVersion.String(),
-			Kind:       "HTTPRoute",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      httpRouteNameForET(target.Name),
-			Namespace: target.Namespace,
-			Labels:    httpRouteLabels(KindEdgeTransformation, et.Name),
-			OwnerReferences: []metav1.OwnerReference{{
-				APIVersion:         routeprismv1alpha1.GroupVersion.String(),
-				Kind:               "EdgeTransformation",
-				Name:               et.Name,
-				UID:                et.UID,
-				Controller:         ptr(true),
-				BlockOwnerDeletion: ptr(true),
-			}},
-		},
-		Spec: gwv1.HTTPRouteSpec{
-			CommonRouteSpec: gwv1.CommonRouteSpec{
-				ParentRefs: []gwv1.ParentReference{{
-					Group: &coreGroup,
-					Kind:  &parentKind,
-					Name:  gwv1.ObjectName(target.Name),
-				}},
-			},
-			Rules: []gwv1.HTTPRouteRule{{
-				BackendRefs: []gwv1.HTTPBackendRef{{
-					BackendRef: gwv1.BackendRef{
-						BackendObjectReference: gwv1.BackendObjectReference{
-							Group: &coreGroup,
-							Name:  gwv1.ObjectName(translatorName(et.Name)),
-							Port:  &translatorPort,
-						},
-					},
-				}},
-			}},
-		},
-	}
+	return gwv1ac.HTTPRoute(httpRouteNameForET(target.Name), target.Namespace).
+		WithLabels(httpRouteLabels(KindEdgeTransformation, et.Name)).
+		WithOwnerReferences(etOwnerRef(et)).
+		WithSpec(gwv1ac.HTTPRouteSpec().
+			WithParentRefs(gwv1ac.ParentReference().
+				WithGroup(coreGroup).
+				WithKind(parentKind).
+				WithName(gwv1.ObjectName(target.Name)),
+			).
+			WithRules(gwv1ac.HTTPRouteRule().
+				WithBackendRefs(gwv1ac.HTTPBackendRef().
+					WithGroup(coreGroup).
+					WithName(gwv1.ObjectName(translatorName(et.Name))).
+					WithPort(translatorPort),
+				),
+			),
+		)
 }
 
 func ptr[T any](v T) *T { return &v }

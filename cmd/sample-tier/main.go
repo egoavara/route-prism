@@ -296,8 +296,6 @@ func renderPage(w http.ResponseWriter, tier, variant, pod, pathPrefix, routingKe
 //	cross-fetch [disabled?] attr, cross-fetch label suffix,
 //	cross-xhr   [disabled?] attr, cross-xhr   label suffix,
 //	cross-URL JSON literal, widget src, widget cfg attr.
-//
-//nolint:lll // embedded HTML template intentionally contains long lines
 const pageTemplate = `<!doctype html>
 <html lang="en">
 <head>

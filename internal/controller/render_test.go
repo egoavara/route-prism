@@ -239,7 +239,7 @@ func TestRenderCRHTTPRoute_Topology(t *testing.T) {
 		t.Fatalf("expected 1 parentRef, got %d", len(hr.Spec.ParentRefs))
 	}
 	pr := hr.Spec.ParentRefs[0]
-	if pr.Group == nil || *pr.Group != "" || pr.Kind == nil || *pr.Kind != "Service" || string(pr.Name) != targetWeb {
+	if pr.Group == nil || *pr.Group != "" || pr.Kind == nil || *pr.Kind != "Service" || pr.Name == nil || string(*pr.Name) != targetWeb {
 		t.Errorf("parentRef should be Service web (core), got %+v", pr)
 	}
 
@@ -256,11 +256,11 @@ func TestRenderCRHTTPRoute_Topology(t *testing.T) {
 		}
 		// Default routing key is "<ns>.<target-svc>" → "demo.web". Regex
 		// is QuoteMeta-escaped so the literal `.` becomes `\.`.
-		if !strings.Contains(rule.Matches[0].Headers[0].Value, `demo\.web=`+want) {
-			t.Errorf("rule %d: header regex should reference %q, got %q", i, want, rule.Matches[0].Headers[0].Value)
+		if rule.Matches[0].Headers[0].Value == nil || !strings.Contains(*rule.Matches[0].Headers[0].Value, `demo\.web=`+want) {
+			t.Errorf("rule %d: header regex should reference %q, got %v", i, want, rule.Matches[0].Headers[0].Value)
 		}
-		if string(rule.BackendRefs[0].Name) != want {
-			t.Errorf("rule %d: backendRef should be %q, got %q", i, want, rule.BackendRefs[0].Name)
+		if rule.BackendRefs[0].Name == nil || string(*rule.BackendRefs[0].Name) != want {
+			t.Errorf("rule %d: backendRef should be %q, got %v", i, want, rule.BackendRefs[0].Name)
 		}
 	}
 	// Catch-all (last rule): no Matches, backend → target.
@@ -268,8 +268,8 @@ func TestRenderCRHTTPRoute_Topology(t *testing.T) {
 	if len(last.Matches) != 0 {
 		t.Errorf("catch-all rule must have no matches, got %+v", last.Matches)
 	}
-	if string(last.BackendRefs[0].Name) != targetWeb {
-		t.Errorf("catch-all backend should be target %q, got %q", targetWeb, last.BackendRefs[0].Name)
+	if last.BackendRefs[0].Name == nil || string(*last.BackendRefs[0].Name) != targetWeb {
+		t.Errorf("catch-all backend should be target %q, got %v", targetWeb, last.BackendRefs[0].Name)
 	}
 }
 
@@ -285,7 +285,7 @@ func TestRenderCRHTTPRoute_NoVariants(t *testing.T) {
 	if len(hr.Spec.Rules) != 1 {
 		t.Fatalf("expected only catch-all rule, got %d rules", len(hr.Spec.Rules))
 	}
-	if string(hr.Spec.Rules[0].BackendRefs[0].Name) != targetWeb {
+	if hr.Spec.Rules[0].BackendRefs[0].Name == nil || string(*hr.Spec.Rules[0].BackendRefs[0].Name) != targetWeb {
 		t.Errorf("catch-all should backend the target")
 	}
 }
@@ -311,8 +311,8 @@ func TestRenderETHTTPRoute_SingleCatchAll(t *testing.T) {
 			}
 		}
 	}
-	if string(r.BackendRefs[0].Name) != translatorName(et.Name) {
-		t.Errorf("backend should be translator %q, got %q", translatorName(et.Name), r.BackendRefs[0].Name)
+	if r.BackendRefs[0].Name == nil || string(*r.BackendRefs[0].Name) != translatorName(et.Name) {
+		t.Errorf("backend should be translator %q, got %v", translatorName(et.Name), r.BackendRefs[0].Name)
 	}
 }
 

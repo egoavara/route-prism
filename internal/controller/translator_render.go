@@ -18,11 +18,12 @@ import (
 	"strings"
 	"text/template"
 
-	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	appsv1ac "k8s.io/client-go/applyconfigurations/apps/v1"
+	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
+	metav1ac "k8s.io/client-go/applyconfigurations/meta/v1"
 
 	routeprismv1alpha1 "github.com/egoavara/route-prism/api/v1alpha1"
 )
@@ -273,52 +274,39 @@ func translatorLabels(et *routeprismv1alpha1.EdgeTransformation) map[string]stri
 	}
 }
 
-func ownerRefForET(et *routeprismv1alpha1.EdgeTransformation) metav1.OwnerReference {
-	return metav1.OwnerReference{
-		APIVersion:         routeprismv1alpha1.GroupVersion.String(),
-		Kind:               "EdgeTransformation",
-		Name:               et.Name,
-		UID:                et.UID,
-		Controller:         ptr(true),
-		BlockOwnerDeletion: ptr(true),
-	}
+func ownerRefForET(et *routeprismv1alpha1.EdgeTransformation) *metav1ac.OwnerReferenceApplyConfiguration {
+	return metav1ac.OwnerReference().
+		WithAPIVersion(routeprismv1alpha1.GroupVersion.String()).
+		WithKind("EdgeTransformation").
+		WithName(et.Name).
+		WithUID(et.UID).
+		WithController(true).
+		WithBlockOwnerDeletion(true)
 }
 
-func renderTranslatorConfigMap(et *routeprismv1alpha1.EdgeTransformation, conf string) *corev1.ConfigMap {
-	return &corev1.ConfigMap{
-		TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "ConfigMap"},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:            translatorName(et.Name),
-			Namespace:       et.Namespace,
-			Labels:          translatorLabels(et),
-			OwnerReferences: []metav1.OwnerReference{ownerRefForET(et)},
-		},
-		Data: map[string]string{"nginx.conf": conf},
-	}
+func renderTranslatorConfigMap(et *routeprismv1alpha1.EdgeTransformation, conf string) *corev1ac.ConfigMapApplyConfiguration {
+	return corev1ac.ConfigMap(translatorName(et.Name), et.Namespace).
+		WithLabels(translatorLabels(et)).
+		WithOwnerReferences(ownerRefForET(et)).
+		WithData(map[string]string{"nginx.conf": conf})
 }
 
-func renderTranslatorService(et *routeprismv1alpha1.EdgeTransformation) *corev1.Service {
+func renderTranslatorService(et *routeprismv1alpha1.EdgeTransformation) *corev1ac.ServiceApplyConfiguration {
 	labels := translatorLabels(et)
-	return &corev1.Service{
-		TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Service"},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:            translatorName(et.Name),
-			Namespace:       et.Namespace,
-			Labels:          labels,
-			OwnerReferences: []metav1.OwnerReference{ownerRefForET(et)},
-		},
-		Spec: corev1.ServiceSpec{
-			Type:     corev1.ServiceTypeClusterIP,
-			Selector: labels,
-			Ports: []corev1.ServicePort{{
-				Name:        "http",
-				Port:        80,
-				TargetPort:  intstr.FromInt(80),
-				Protocol:    corev1.ProtocolTCP,
-				AppProtocol: ptr("http"),
-			}},
-		},
-	}
+	return corev1ac.Service(translatorName(et.Name), et.Namespace).
+		WithLabels(labels).
+		WithOwnerReferences(ownerRefForET(et)).
+		WithSpec(corev1ac.ServiceSpec().
+			WithType(corev1.ServiceTypeClusterIP).
+			WithSelector(labels).
+			WithPorts(corev1ac.ServicePort().
+				WithName("http").
+				WithPort(80).
+				WithTargetPort(intstr.FromInt(80)).
+				WithProtocol(corev1.ProtocolTCP).
+				WithAppProtocol("http"),
+			),
+		)
 }
 
 // configChecksum returns a short stable hash of the rendered nginx.conf,
@@ -329,66 +317,54 @@ func configChecksum(conf string) string {
 	return hex.EncodeToString(sum[:8])
 }
 
-func renderTranslatorDeployment(et *routeprismv1alpha1.EdgeTransformation, conf string) *appsv1.Deployment {
+func renderTranslatorDeployment(et *routeprismv1alpha1.EdgeTransformation, conf string) *appsv1ac.DeploymentApplyConfiguration {
 	labels := translatorLabels(et)
 	replicas := int32(1)
 	podLabels := make(map[string]string, len(labels))
 	maps.Copy(podLabels, labels)
-	return &appsv1.Deployment{
-		TypeMeta: metav1.TypeMeta{APIVersion: "apps/v1", Kind: "Deployment"},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:            translatorName(et.Name),
-			Namespace:       et.Namespace,
-			Labels:          labels,
-			OwnerReferences: []metav1.OwnerReference{ownerRefForET(et)},
-		},
-		Spec: appsv1.DeploymentSpec{
-			Replicas: &replicas,
-			Selector: &metav1.LabelSelector{MatchLabels: labels},
-			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{
-					Labels: podLabels,
-					Annotations: map[string]string{
-						"route-prism.egoavara.net/config-checksum": configChecksum(conf),
-					},
-				},
-				Spec: corev1.PodSpec{
-					Containers: []corev1.Container{{
-						Name:  "openresty",
-						Image: "openresty/openresty:1.25.3.1-alpine",
-						Ports: []corev1.ContainerPort{{ContainerPort: 80}},
-						Resources: corev1.ResourceRequirements{
-							Requests: corev1.ResourceList{
+	return appsv1ac.Deployment(translatorName(et.Name), et.Namespace).
+		WithLabels(labels).
+		WithOwnerReferences(ownerRefForET(et)).
+		WithSpec(appsv1ac.DeploymentSpec().
+			WithReplicas(replicas).
+			WithSelector(metav1ac.LabelSelector().WithMatchLabels(labels)).
+			WithTemplate(corev1ac.PodTemplateSpec().
+				WithLabels(podLabels).
+				WithAnnotations(map[string]string{
+					"route-prism.egoavara.net/config-checksum": configChecksum(conf),
+				}).
+				WithSpec(corev1ac.PodSpec().
+					WithContainers(corev1ac.Container().
+						WithName("openresty").
+						WithImage("openresty/openresty:1.25.3.1-alpine").
+						WithPorts(corev1ac.ContainerPort().WithContainerPort(80)).
+						WithResources(corev1ac.ResourceRequirements().
+							WithRequests(corev1.ResourceList{
 								corev1.ResourceCPU:    resource.MustParse("10m"),
 								corev1.ResourceMemory: resource.MustParse("32Mi"),
-							},
-							Limits: corev1.ResourceList{
+							}).
+							WithLimits(corev1.ResourceList{
 								corev1.ResourceCPU:    resource.MustParse("200m"),
 								corev1.ResourceMemory: resource.MustParse("128Mi"),
-							},
-						},
-						VolumeMounts: []corev1.VolumeMount{{
-							Name:      "conf",
-							MountPath: "/usr/local/openresty/nginx/conf/nginx.conf",
-							SubPath:   "nginx.conf",
-						}},
-						ReadinessProbe: &corev1.Probe{
-							ProbeHandler: corev1.ProbeHandler{
-								TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt(80)},
-							},
-							PeriodSeconds: 5,
-						},
-					}},
-					Volumes: []corev1.Volume{{
-						Name: "conf",
-						VolumeSource: corev1.VolumeSource{
-							ConfigMap: &corev1.ConfigMapVolumeSource{
-								LocalObjectReference: corev1.LocalObjectReference{Name: translatorName(et.Name)},
-							},
-						},
-					}},
-				},
-			},
-		},
-	}
+							}),
+						).
+						WithVolumeMounts(corev1ac.VolumeMount().
+							WithName("conf").
+							WithMountPath("/usr/local/openresty/nginx/conf/nginx.conf").
+							WithSubPath("nginx.conf"),
+						).
+						WithReadinessProbe(corev1ac.Probe().
+							WithTCPSocket(corev1ac.TCPSocketAction().WithPort(intstr.FromInt(80))).
+							WithPeriodSeconds(5),
+						),
+					).
+					WithVolumes(corev1ac.Volume().
+						WithName("conf").
+						WithConfigMap(corev1ac.ConfigMapVolumeSource().
+							WithName(translatorName(et.Name)),
+						),
+					),
+				),
+			),
+		)
 }

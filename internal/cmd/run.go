@@ -112,9 +112,7 @@ func runManager(ctx context.Context, cfg *config.Config, zapOpts *zap.Options) e
 		return err
 	}
 
-	if err := startStandalonePromListener(ctx, cfg.Otel, obs); err != nil {
-		return err
-	}
+	startStandalonePromListener(ctx, cfg.Otel, obs)
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		return fmt.Errorf("add healthz: %w", err)
@@ -272,12 +270,11 @@ func registerPreflight(mgr ctrl.Manager) error {
 
 // startStandalonePromListener handles the case where the operator wants
 // /metrics on a separate port (e.g. when the API server is disabled, or
-// when network policy treats Prometheus traffic differently).
-//
-//nolint:unparam // signature kept for symmetry / future extensibility
-func startStandalonePromListener(ctx context.Context, cfg config.Otel, obs observability.Result) error {
+// when network policy treats Prometheus traffic differently). The listener
+// runs in goroutines; failures are logged.
+func startStandalonePromListener(ctx context.Context, cfg config.Otel, obs observability.Result) {
 	if !cfg.Prometheus.Enabled || obs.PromHandler == nil || cfg.Prometheus.BindAddress == "" {
-		return nil
+		return
 	}
 	path := cfg.Prometheus.Path
 	if path == "" {
@@ -302,5 +299,4 @@ func startStandalonePromListener(ctx context.Context, cfg config.Otel, obs obser
 		defer cancel()
 		_ = srv.Shutdown(shutdownCtx)
 	}()
-	return nil
 }

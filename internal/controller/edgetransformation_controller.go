@@ -62,7 +62,7 @@ func (r *EdgeTransformationReconciler) Reconcile(ctx context.Context, req ctrl.R
 	}
 
 	if et.Spec.Mode != routeprismv1alpha1.EdgeModeRouter {
-		setETCondition(&et, "Ready", metav1.ConditionFalse, "ModeNotImplemented",
+		setETCondition(&et, metav1.ConditionFalse, "ModeNotImplemented",
 			fmt.Sprintf("EdgeMode %q is not implemented in this prototype.", et.Spec.Mode))
 		r.event(&et, corev1.EventTypeWarning, EventReasonModeNotImplemented,
 			"EdgeMode %q is not implemented; only %q is supported.",
@@ -79,7 +79,7 @@ func (r *EdgeTransformationReconciler) Reconcile(ctx context.Context, req ctrl.R
 		if apierrors.IsNotFound(err) {
 			r.event(&et, corev1.EventTypeWarning, EventReasonTargetNotFound,
 				"target Service %q not found in namespace %q", targetName, et.Namespace)
-			setETCondition(&et, "Ready", metav1.ConditionFalse, "TargetNotFound", "target Service does not exist")
+			setETCondition(&et, metav1.ConditionFalse, "TargetNotFound", "target Service does not exist")
 			return ctrl.Result{}, r.Status().Update(ctx, &et)
 		}
 		return ctrl.Result{}, err
@@ -95,7 +95,7 @@ func (r *EdgeTransformationReconciler) Reconcile(ctx context.Context, req ctrl.R
 			"target Service %q has spec.type=%q; GAMMA HTTPRoutes attach only to ClusterIP Services, so the translator's HTTPRoute will not be picked up by the mesh and traffic falls through to the Service's plain selector",
 			target.Name, target.Spec.Type)
 		r.event(&et, corev1.EventTypeWarning, EventReasonUnsupportedTargetType, "%s", msg)
-		setETCondition(&et, "Ready", metav1.ConditionFalse, EventReasonUnsupportedTargetType, msg)
+		setETCondition(&et, metav1.ConditionFalse, EventReasonUnsupportedTargetType, msg)
 		return ctrl.Result{}, r.Status().Update(ctx, &et)
 	}
 
@@ -125,7 +125,7 @@ func (r *EdgeTransformationReconciler) Reconcile(ctx context.Context, req ctrl.R
 		r.event(&et, corev1.EventTypeWarning, EventReasonTargetNotFound,
 			"could not resolve any ready endpoint for target Service %q: %v",
 			target.Name, err)
-		setETCondition(&et, "Ready", metav1.ConditionFalse, "NoReadyEndpoints",
+		setETCondition(&et, metav1.ConditionFalse, "NoReadyEndpoints",
 			"target Service has no ready endpoints yet")
 		return ctrl.Result{}, r.Status().Update(ctx, &et)
 	}
@@ -186,13 +186,13 @@ func (r *EdgeTransformationReconciler) Reconcile(ctx context.Context, req ctrl.R
 		if smart {
 			modeStr = "smart"
 		}
-		setETCondition(&et, "Ready", metav1.ConditionTrue, "Reconciled",
+		setETCondition(&et, metav1.ConditionTrue, "Reconciled",
 			fmt.Sprintf("Translator ready in %s mode; HTTPRoute applied.", modeStr))
 		r.event(&et, corev1.EventTypeNormal, EventReasonReconciled,
 			"Translator (%s mode) ready; applied HTTPRoute %q on target %q",
 			modeStr, httpRouteNameForET(target.Name), target.Name)
 	} else {
-		setETCondition(&et, "Ready", metav1.ConditionFalse, "TranslatorNotReady",
+		setETCondition(&et, metav1.ConditionFalse, "TranslatorNotReady",
 			"Translator deployment has no available replicas yet.")
 		r.event(&et, corev1.EventTypeWarning, EventReasonTranslatorNotReady,
 			"Translator Deployment %q has no available replicas yet.", translatorName(et.Name))
@@ -205,8 +205,8 @@ func (r *EdgeTransformationReconciler) Reconcile(ctx context.Context, req ctrl.R
 	return ctrl.Result{}, nil
 }
 
-func (r *EdgeTransformationReconciler) apply(ctx context.Context, obj client.Object) error {
-	return r.Patch(ctx, obj, client.Apply, client.FieldOwner(FieldOwnerET), client.ForceOwnership) //nolint:staticcheck // client.Apply replacement requires server-side apply refactor; tracked separately.
+func (r *EdgeTransformationReconciler) apply(ctx context.Context, cfg runtime.ApplyConfiguration) error {
+	return r.Apply(ctx, cfg, client.FieldOwner(FieldOwnerET), client.ForceOwnership)
 }
 
 // findCRForTarget returns a ContextRoute attached to the same target Service,
@@ -339,8 +339,11 @@ func (r *EdgeTransformationReconciler) surfaceHTTPRouteRejection(ctx context.Con
 	}
 }
 
-//nolint:unparam // signature kept for symmetry / future extensibility
-func setETCondition(et *routeprismv1alpha1.EdgeTransformation, condType string, status metav1.ConditionStatus, reason, msg string) {
+// setETCondition upserts a Ready condition on the EdgeTransformation.
+// Only Ready is currently surfaced; if other condition types are added
+// later, lift condType back into the parameter list.
+func setETCondition(et *routeprismv1alpha1.EdgeTransformation, status metav1.ConditionStatus, reason, msg string) {
+	const condType = "Ready"
 	cond := metav1.Condition{
 		Type:               condType,
 		Status:             status,
