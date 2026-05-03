@@ -266,9 +266,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          asset="modules/operator/dist/route-prism-${{ needs.meta.outputs.version_no_v }}.yaml"
+          versioned="modules/operator/dist/route-prism-${{ needs.meta.outputs.version_no_v }}.yaml"
+          # Stable alias so `releases/latest/download/route-prism.yaml` works.
+          alias="modules/operator/dist/route-prism.yaml"
+          cp "${versioned}" "${alias}"
           gh release upload "${{ needs.meta.outputs.version }}" \
-            "${asset}" --clobber
+            "${versioned}" "${alias}" --clobber
 
   helm:
     name: Package & publish Helm chart
