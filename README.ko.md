@@ -81,6 +81,8 @@ flowchart LR
 curl -sSL https://raw.githubusercontent.com/egoavara/route-prism/main/scripts/verify.sh | bash
 ```
 
+`curl | bash` 가 차단되는 환경(샌드박스·보안 정책)이라면 저장소를 clone 한 뒤 `./scripts/verify.sh` 를 직접 실행해도 동일하게 동작합니다.
+
 실패하면 원인(CRD 누락 / GAMMA 미지원 / 컨트롤러 거부)과 Istio·Cilium 버전별 조치를 함께 안내합니다.
 
 ## 설치

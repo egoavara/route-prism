@@ -81,6 +81,8 @@ Check that your mesh actually honours GAMMA before installing.
 curl -sSL https://raw.githubusercontent.com/egoavara/route-prism/main/scripts/verify.sh | bash
 ```
 
+If your environment blocks `curl | bash` (sandboxes, security policies), clone the repo and run `./scripts/verify.sh` directly — it is identical.
+
 On failure it pinpoints the cause (missing CRD / no GAMMA controller / controller rejection) with version-specific advice for Istio and Cilium.
 
 ## Install
