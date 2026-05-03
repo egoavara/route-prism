@@ -12,7 +12,7 @@
 
 [![License](https://img.shields.io/github/license/egoavara/route-prism?color=blue)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/egoavara/route-prism?include_prereleases&sort=semver)](https://github.com/egoavara/route-prism/releases)
-[![Go Version](https://img.shields.io/github/go-mod/go-version/egoavara/route-prism)](go.mod)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/egoavara/route-prism?filename=modules/operator/go.mod)](modules/operator/go.mod)
 [![Gateway API](https://img.shields.io/badge/Gateway%20API-GAMMA-326CE5?logo=kubernetes&logoColor=white)](https://gateway-api.sigs.k8s.io/mesh/gamma/)
 
 [![Container](https://img.shields.io/badge/ghcr.io-egoavara%2Froute--prism-2496ED?logo=docker&logoColor=white)](https://github.com/egoavara/route-prism/pkgs/container/route-prism)
